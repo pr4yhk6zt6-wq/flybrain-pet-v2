@@ -3,6 +3,11 @@
 name: FlyBrainPet
 options:
   bundleIdPrefix: com.flybrain
+  # CI runners (macos-14) ship Xcode 15.4, which refuses project format 77
+  # (Xcode 16 default). Pin the generated format to xcode15_3 so the same
+  # spec also opens in older Xcode installations.
+  projectFormat: xcode15_3
+  xcodeVersion: "15.3"
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true

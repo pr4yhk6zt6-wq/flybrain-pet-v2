@@ -151,9 +151,27 @@ final class NeuralEngineTests: XCTestCase {
         var synapses: [SynapseRecord] = []
         var outgoing: [OutEdgeRange] = []
 
+        // Synapses are appended FIRST: an OutEdgeRange indexes into the synapse
+        // array, so a helper that captured synapses.count while the array was
+        // still empty made every neuron claim edge 0 — the GABAergic cell then
+        // emitted the *excitatory* edge (veto increased firing 7 vs 4) and the
+        // inhibitory edge was unreachable by anyone.
+        synapses.append(SynapseRecord(preNeuron: 0, postNeuron: 2, synapseCount: 100,
+                                      transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+                                      sign: Int8(SynapseSign.excitatory.rawValue),
+                                      confidence: 50, delaySteps: 1, estimatedEfficacy: 0.6))
+        synapses.append(SynapseRecord(preNeuron: 1, postNeuron: 2, synapseCount: 100,
+                                      transmitter: UInt8(TransmitterType.gabaergic.rawValue),
+                                      sign: Int8(SynapseSign.inhibitory.rawValue),
+                                      confidence: 50, delaySteps: 1, estimatedEfficacy: 2.5))
+
+        // ranges are assigned with a forward cursor over the (already complete)
+        // synapse array, so neuron i owns exactly its own edge
+        var edgeCursor = 0
         func add(_ n: NeuronRecord, edges: Int) {
             neurons.append(n)
-            outgoing.append(OutEdgeRange(start: Int32(synapses.count), count: Int32(edges)))
+            outgoing.append(OutEdgeRange(start: Int32(edgeCursor), count: Int32(edges)))
+            edgeCursor += edges
         }
         add(NeuronRecord(canonicalID: 0, datasetID: 0, type: 0, region: 9, side: 0,
                          transmitter: UInt8(TransmitterType.cholinergic.rawValue),
@@ -170,22 +188,6 @@ final class NeuralEngineTests: XCTestCase {
                          provenance: TestSupport.provIndex(.inferred),
                          morphologyIndex: -1, incomingStart: 0, incomingCount: 0,
                          outgoingStart: 0, outgoingCount: 0, x: 0, y: 0, z: 0), edges: 0)
-        // Synapses first — OutEdgeRange start/count indexes into this array, so
-        // building the ranges before appending synapses would make several
-        // neurons alias the same edge (this exact mistake made the inhibitory
-        // veto test drive neuron 2 *harder* instead of silencing it).
-        synapses.append(SynapseRecord(preNeuron: 0, postNeuron: 2, synapseCount: 100,
-                                      transmitter: UInt8(TransmitterType.cholinergic.rawValue),
-                                      sign: Int8(SynapseSign.excitatory.rawValue),
-                                      confidence: 50, delaySteps: 1, estimatedEfficacy: 0.6))
-        synapses.append(SynapseRecord(preNeuron: 1, postNeuron: 2, synapseCount: 100,
-                                      transmitter: UInt8(TransmitterType.gabaergic.rawValue),
-                                      sign: Int8(SynapseSign.inhibitory.rawValue),
-                                      confidence: 50, delaySteps: 1, estimatedEfficacy: 2.5))
-        // now the ranges: neuron 0 owns edge [0,1), neuron 1 owns edge [1,2)
-        outgoing.append(OutEdgeRange(start: 0, count: 1))
-        outgoing.append(OutEdgeRange(start: 1, count: 1))
-        outgoing.append(OutEdgeRange(start: 2, count: 0))
 
         let header = ConnectomeHeader(magic: 0x46425031, version: 1, flags: 0,
                                       neuronCount: 3, synapseCount: 2, morphologyCount: 0, regionCount: 0,

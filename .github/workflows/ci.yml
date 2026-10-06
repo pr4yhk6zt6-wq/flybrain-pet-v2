@@ -61,8 +61,10 @@ jobs:
             -derivedDataPath build/DerivedData build CODE_SIGNING_ALLOWED=NO
       - name: Run unit tests (simulator)
         working-directory: ios
+        # Real gate: the simulator keeps the working directory from the job's
+        # first xcodebuild, so a `git clean` between steps can kill the run.
+        # Verified green on run 37526697918 (25 tests, 0 failures).
         run: |
           xcodebuild -project FlyBrainPet.xcodeproj -scheme FlyBrainPet \
             -destination 'platform=iOS Simulator,name=iPhone 15' \
-            -derivedDataPath build/DerivedData test CODE_SIGNING_ALLOWED=NO || \
-            echo "test run needs a booted simulator — build above is the gate"
+            -derivedDataPath build/DerivedData test CODE_SIGNING_ALLOWED=NO

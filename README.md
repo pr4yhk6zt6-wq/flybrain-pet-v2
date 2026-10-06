@@ -1,0 +1,56 @@
+# FlyBrain Pet — Embodied Drosophila Neural Simulation for iPhone
+
+> "Do not create a fly pet with scripted AI. Create a biologically grounded embodied neural simulation in which the fly's behavior **emerges** from a connectome-based nervous system."
+
+**FlyBrain Pet** is an iOS app (iPhone 11 and newer, A13+) that simulates an adult female *Drosophila melanogaster* as a **closed-loop embodied nervous system**:
+
+```
+WORLD → sensors → sensory neurons → CONNECTOME → motor neurons → BODY → WORLD → ...
+```
+
+There is no behavior tree, no scripted personality, no LLM controlling the fly.
+Behavior is **emergent action selection** from real spiking neural dynamics over connectome-derived network topology.
+
+## Status
+- [x] Phase 1: repo scaffold, architecture, data model, provenance system
+- [x] Phase 2 (core): event-driven spiking neural engine (LIF/AdEx), sparse spike propagation, deterministic, unit-tested
+- [ ] Phase 3–14: see `PLAN.md`
+
+**Current caveat:** the bundled dataset (`data/generated/demo_micro.fbpack`) is a **small synthetic stand-in** explicitly labeled `SYNTHETIC-DEMO`. It exists so the engine, tests and pipeline are real and verifiable *now*. Real connectome ingestion (BANC + FAFB/FlyWire, adult female) is the next priority — see `docs/CONNECTOME.md` and `python/tools/`.
+
+## Scientific integrity (short version)
+- Every neuron/synapse carries **provenance + confidence** (`MEASURED` … `UNKNOWN`).
+- Anatomical connection ≠ physiological strength → we store `estimatedEfficacy` as **INFERRED**, never as measured.
+- Every visual spike in the app corresponds to a real simulation event. No decorative sparkles.
+- Full rules: `docs/BIOLOGY.md`, `docs/BIOLOGICAL_LIMITATIONS.md`, `docs/SCIENCE_SOURCES.md`.
+
+## Repository layout
+```
+ios/Sources/FlyBrainCore/   Swift simulation core (platform-free, testable)
+ios/Tests/FlyBrainCoreTests/ XCTest
+python/                      desktop data pipeline (raw → compressed iOS assets)
+tools/tests/                 pipeline validation harness
+docs/                        architecture + science docs
+data/generated/              compiled .fbpack assets
+scripts/                     build & test helpers
+```
+
+## Build & test
+Pipeline (macOS / Linux / iSH):
+```sh
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r python/requirements.txt
+python3 -m pytest python/tests -q            # pipeline tests
+./scripts/gen_synth_dataset.sh               # regenerate synthetic demo asset
+python3 tools/tests/validate_fbpack.py data/generated/demo_micro.fbpack
+```
+iOS (macOS with Xcode 15+):
+```sh
+cd ios && xcodebuild -scheme FlyBrainCore -destination 'platform=iOS Simulator,name=iPhone 15' test
+```
+> Note: this repo currently ships the *core engine + pipeline*. The Xcode app shell (Metal renderer, Life/Connectome modes) is Phase 9–10 — the Swift core is written to be dropped straight into an Xcode project.
+
+## License & data
+- Code: MIT (see `LICENSE`).
+- Synthetic demo dataset: CC0 (generated, not biological data).
+- Real connectome datasets are external works with their own licenses — documented in `docs/SCIENCE_SOURCES.md`.

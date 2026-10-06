@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Xcode / Swift
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Node (future tooling)
+node_modules/
+
+# Credentials — never commit
+*.pem
+*.key
+.env

@@ -1,0 +1,555 @@
+//
+//  NeuralEngine.swift
+//  FlyBrainCore
+//
+//  Sparse, event-driven spiking neural simulation (spec #6, #7, #28).
+//
+//  Design principles:
+//  - STRUCTURAL connectome (Connectome, immutable, shared) is separated from
+//    DYNAMIC neural state (per-fly, this engine) — spec #9, #117.
+//  - Events only: quiescent neurons cost ~nothing; spikes are queued into a
+//    deterministic min-heap ordered by (time, sequence) — reproducible replays.
+//  - Neuron models: LIF (level 0) and AdEx-like adaptive LIF (level 1);
+//    higher levels plug in via protocol conformance (spec #6).
+//  - Every spike emitted is a real simulation event. No decorative activity.
+//
+
+import Foundation
+
+// MARK: - Dynamic per-fly neural state
+
+/// Per-neuron dynamic state packed for cache locality.
+public struct NeuronDynamics {
+    public var voltage: Float          // mV
+    public var threshold: Float        // mV
+    public var reset: Float            // mV
+    public var resting: Float          // mV (E_rest)
+    public var tauM: Float             // membrane time constant (ms)
+    public var tauRefractory: Float    // ms
+    public var adaptation: Float       // AdEx w (nA-ish, normalized)
+    public var tauAdaptation: Float    // ms
+    public var adaptationCoupling: Float // b
+    public var spikeTriggeredAdaptation: Float // a
+    public var firingRate: Float       // Hz, smoothed
+    public var refractoryRemaining: Float
+    public var lastSpikeTime: Double
+    public var level: UInt8            // neuron model level 0..3
+
+    public init(level: UInt8 = 1,
+                resting: Float = -60,
+                threshold: Float = -50,
+                reset: Float = -65,
+                tauM: Float = 10,
+                tauRefractory: Float = 2,
+                adaptationCoupling: Float = 0.0,
+                spikeTriggeredAdaptation: Float = 0.0,
+                tauAdaptation: Float = 100) {
+        self.level = level
+        self.resting = resting
+        self.threshold = threshold
+        self.reset = reset
+        self.tauM = tauM
+        self.tauRefractory = tauRefractory
+        self.adaptationCoupling = adaptationCoupling
+        self.spikeTriggeredAdaptation = spikeTriggeredAdaptation
+        self.tauAdaptation = tauAdaptation
+        self.voltage = resting
+        self.adaptation = 0
+        self.firingRate = 0
+        self.refractoryRemaining = 0
+        self.lastSpikeTime = -.infinity
+    }
+}
+
+// MARK: - Synaptic events and deterministic event queue
+
+/// A pending synaptic input (postsynaptic current). Sorted by (time, seq).
+public struct SynapticEvent: Codable, Sendable {
+    public var time: Double            // simulation ms at which event is delivered
+    public var seq: UInt64             // insertion order — deterministic tie-break
+    public var postNeuron: Int32
+    public var current: Float          // nA (signed: excitatory/inhibitory)
+    public var transmitter: UInt8
+
+    public init(time: Double, seq: UInt64, postNeuron: Int32, current: Float, transmitter: UInt8) {
+        self.time = time
+        self.seq = seq
+        self.postNeuron = postNeuron
+        self.current = current
+        self.transmitter = transmitter
+    }
+}
+
+/// Deterministic binary min-heap keyed by (time, seq).
+public struct EventHeap {
+    private var items: [SynapticEvent] = []
+    public private(set) var count: Int { get { items.count } set {} }
+
+    public init() {}
+
+    public mutating func push(_ e: SynapticEvent) {
+        items.append(e)
+        var i = items.count - 1
+        while i > 0 {
+            let parent = (i - 1) / 2
+            if less(items[i], items[parent]) {
+                items.swapAt(i, parent)
+                i = parent
+            } else { break }
+        }
+    }
+
+    public mutating func pop() -> SynapticEvent? {
+        guard !items.isEmpty else { return nil }
+        if items.count == 1 { return items.removeLast() }
+        let top = items[0]
+        items[0] = items.removeLast()
+        var i = 0
+        let n = items.count
+        while true {
+            let l = 2 * i + 1, r = 2 * i + 2
+            var smallest = i
+            if l < n && less(items[l], items[smallest]) { smallest = l }
+            if r < n && less(items[r], items[smallest]) { smallest = r }
+            if smallest == i { break }
+            items.swapAt(i, smallest)
+            i = smallest
+        }
+        return top
+    }
+
+    public var top: SynapticEvent? { items.first }
+    public var isEmpty: Bool { items.isEmpty }
+
+    /// All items in heap order (for snapshot/serialization — deterministic
+    /// because (time, seq) ordering fully determines the heap).
+    public var allItems: [SynapticEvent] { items }
+
+    /// Rebuild the heap from a previously snapshotted array.
+    public mutating func rebuild(from items: [SynapticEvent]) {
+        self.items = []
+        for e in items { push(e) }
+    }
+
+    @inline(__always) private func less(_ a: SynapticEvent, _ b: SynapticEvent) -> Bool {
+        a.time < b.time || (a.time == b.time && a.seq < b.seq)
+    }
+}
+
+// MARK: - Simulation parameters
+
+public struct SimulationParameters: Sendable {
+    /// Global experimental efficacy multiplier (spec #39/#54). Labeled
+    /// EXPERIMENTAL — defaults to 1.0 (biological default).
+    public var synapticGain: Float = 1.0
+    public var noiseScale: Float = 0.005
+    public var dt: Double = 0.1        // ms per neural step
+    public var maxEventsPerStep: Int = 1_000_000
+    public var seed: UInt64 = 0x5EED
+
+    public init() {}
+}
+
+/// LOD of the neural simulation (spec #23, #48).
+public enum SimulationLOD: Int, Sendable {
+    case background = 0    // reduced population rate
+    case wholeNetwork = 1  // full population, LIF/AdEx
+    case selectedCircuit = 2
+    case singleNeuron = 3
+}
+
+// MARK: - Neuron model protocol (levels 0..3)
+
+public protocol NeuronModel {
+    /// Advance one step and return true if the neuron fires now.
+    /// `incomingCurrent` is the summed postsynaptic current this step.
+    mutating func step(dynamics: inout NeuronDynamics, incomingCurrent: Float,
+                       dt: Double, spikeNow: Bool) -> Bool
+}
+
+/// LEVEL 0 — simple LIF (very low power background).
+public struct LIFModel: NeuronModel {
+    public init() {}
+    public mutating func step(dynamics: inout NeuronDynamics, incomingCurrent: Float,
+                              dt: Double, spikeNow: Bool) -> Bool {
+        if dynamics.refractoryRemaining > 0 {
+            dynamics.refractoryRemaining -= Float(dt)
+            return false
+        }
+        let dv = ((dynamics.resting - dynamics.voltage) + incomingCurrent * 10) / dynamics.tauM * Float(dt)
+        dynamics.voltage += dv
+        if dynamics.voltage >= dynamics.threshold {
+            dynamics.voltage = dynamics.reset
+            dynamics.refractoryRemaining = dynamics.tauRefractory
+            dynamics.lastSpikeTime = 0 // set by engine
+            return true
+        }
+        return false
+    }
+}
+
+/// LEVEL 1 — adaptive LIF / AdEx-like (default whole-network model).
+public struct AdExModel: NeuronModel {
+    public init() {}
+    public mutating func step(dynamics: inout NeuronDynamics, incomingCurrent: Float,
+                              dt: Double, spikeNow: Bool) -> Bool {
+        if dynamics.refractoryRemaining > 0 {
+            dynamics.refractoryRemaining -= Float(dt)
+            return false
+        }
+        // Membrane
+        let dv = ((dynamics.resting - dynamics.voltage) + incomingCurrent * 10
+                  - dynamics.adaptation) / dynamics.tauM * Float(dt)
+        dynamics.voltage += dv
+        // Adaptation variable (AdEx w)
+        let dw = (dynamics.adaptationCoupling * (dynamics.voltage - dynamics.resting)
+                  - dynamics.adaptation) / dynamics.tauAdaptation * Float(dt)
+        dynamics.adaptation += dw
+
+        if dynamics.voltage >= dynamics.threshold {
+            dynamics.voltage = dynamics.reset
+            dynamics.refractoryRemaining = dynamics.tauRefractory
+            dynamics.adaptation += dynamics.spikeTriggeredAdaptation
+            return true
+        }
+        return false
+    }
+}
+
+// MARK: - Spiking event emission
+
+/// A spike emitted by a neuron (real event — for telemetry, raster, rendering).
+public struct SpikeEvent: Sendable {
+    public let neuron: Int32
+    public let time: Double          // ms
+    public let sourceTransmitter: UInt8
+}
+
+// MARK: - The engine
+
+public final class NeuralEngine: @unchecked Sendable {
+    public let connectome: Connectome
+    public private(set) var dynamics: [NeuronDynamics]
+    public private(set) var modelLevels: [UInt8]
+    public var parameters: SimulationParameters
+
+    // Deterministic RNG (xorshift64*), seeded — reproducible (spec #63)
+    private var rngState: UInt64
+
+    // Event machinery
+    public private(set) var eventHeap = EventHeap()
+    private var eventSeq: UInt64 = 0
+    private var spikeAccumulator: [Float]   // incoming current per neuron (this event batch)
+
+    // Telemetry (all real)
+    public private(set) var spikeCount: UInt64 = 0
+    public private(set) var spikeEventsThisWindow: UInt64 = 0
+    public private(set) var windowStartTime: Double = 0
+    public private(set) var lastWindowSpikesPerSecond: Double = 0
+    public private(set) var currentTimeMs: Double = 0
+    public private(set) var simulationStep: UInt64 = 0
+
+    // Recent spike ring buffer for raster/inspector (unaligned, cheap)
+    public private(set) var recentSpikesPerNeuron: [UInt16]
+    private var recentWindowSeconds: Double = 1.0
+
+    public private(set) var activeNeuronsThisWindow: Int32 = 0
+    private var activeWindowMark: [UInt32]
+
+    /// AdEx model shared for whole-network LOD1.
+    private var adex = AdExModel()
+    private var lif = LIFModel()
+
+    public init(connectome: Connectome,
+                parameters: SimulationParameters = SimulationParameters(),
+                restingPotential: Float = -60,
+                threshold: Float = -50) {
+        self.connectome = connectome
+        self.parameters = parameters
+        self.rngState = parameters.seed &* 0x9E3779B97F4A7C15 &+ 1
+        let n = connectome.neuronCount
+        self.dynamics = [NeuronDynamics](repeating: NeuronDynamics(), count: n)
+        self.modelLevels = [UInt8](repeating: 1, count: n)
+        self.spikeAccumulator = [Float](repeating: 0, count: n)
+        self.recentSpikesPerNeuron = [UInt16](repeating: 0, count: n)
+        // Sentinel so the first spike of second-bucket 0 is counted.
+        self.activeWindowMark = [UInt32](repeating: UInt32.max, count: n)
+
+        // Region-based default model assignment (spec #23)
+        for i in 0..<n {
+            let region = RegionID(rawValue: Int(connectome.neurons[i].region)) ?? .unknown
+            let d = NeuronDynamics(level: 1, resting: restingPotential, threshold: threshold)
+            switch region {
+            case .ventralNerveCord, .legNeuromere, .wingNeuropil, .haltereNeuropil, .abdominalNeuromere:
+                // motor/sensory periphery: fast, little adaptation
+                var dd = d
+                dd.tauM = 5
+                dd.tauRefractory = 1
+                dd.adaptationCoupling = 0.2
+                dd.spikeTriggeredAdaptation = 0.5
+                dynamics[i] = dd
+            case .mushroomBody, .centralComplex:
+                // learning/integrative: stronger adaptation
+                var dd = d
+                dd.tauM = 15
+                dd.tauAdaptation = 150
+                dd.adaptationCoupling = 0.5
+                dd.spikeTriggeredAdaptation = 2.0
+                dynamics[i] = dd
+            default:
+                dynamics[i] = d
+            }
+        }
+    }
+
+    // MARK: - Simulation loop (fixed-step event-driven, deterministic)
+
+    /// Run `steps` simulation steps of `dt` ms each. Pure function of state —
+    /// deterministic given seed + connectome + inputs (spec #63).
+    public func run(steps: Int) {
+        for _ in 0..<steps {
+            step()
+        }
+    }
+
+    /// One simulation step (dt ms). Sorted event population first, then
+    /// integrate all neurons that received input this step (sparse).
+    public func step() {
+        let dt = parameters.dt
+        let stepTime = currentTimeMs + dt
+        simulationStep += 1
+
+        // 1) Deliver all events at or before stepTime
+        var touched = [Int32]()
+        var touchedSet = Set<Int32>()
+        var delivered = 0
+        while let ev = eventHeap.top, ev.time <= stepTime, delivered < parameters.maxEventsPerStep {
+            _ = eventHeap.pop()
+            spikeAccumulator[Int(ev.postNeuron)] += ev.current
+            if touchedSet.insert(ev.postNeuron).inserted { touched.append(ev.postNeuron) }
+            delivered += 1
+        }
+
+        // 2) Integrate touched neurons (sparse — untrouched stay at rest)
+        for idx in touched {
+            let i = Int(idx)
+            let current = spikeAccumulator[i]
+            spikeAccumulator[i] = 0
+
+            // intrinsic noise (deterministic, seeded)
+            let noise = (Float(randomDouble()) * 2 - 1) * parameters.noiseScale * dynamics[i].tauM
+
+            var fired = false
+            switch modelLevels[i] {
+            case 0:
+                fired = lif.step(dynamics: &dynamics[i], incomingCurrent: current + noise,
+                                 dt: dt, spikeNow: false)
+            default:
+                fired = adex.step(dynamics: &dynamics[i], incomingCurrent: current + noise,
+                                  dt: dt, spikeNow: false)
+            }
+
+            if fired {
+                emitSpike(from: Int32(i), at: stepTime)
+            }
+        }
+
+        // 3) Advance global clock; recompute telemetry windows
+        currentTimeMs = stepTime
+        if currentTimeMs - windowStartTime >= 1000 {
+            lastWindowSpikesPerSecond = Double(spikeEventsThisWindow) * 1000.0 / (currentTimeMs - windowStartTime)
+            spikeEventsThisWindow = 0
+            windowStartTime = currentTimeMs
+            activeNeuronsThisWindow = 0
+            // sentinel reset — all marks now stale
+            activeWindowMark.withUnsafeMutableBufferPointer { buf in
+                buf.initialize(repeating: UInt32.max)
+            }
+        }
+
+        // decay recent-spike ring
+        if simulationStep % 100 == 0 {
+            let decayThreshold = UInt16(max(1, Int(recentWindowSeconds * 1000.0 / dt) / 4))
+            for i in 0..<recentSpikesPerNeuron.count {
+                if recentSpikesPerNeuron[i] > decayThreshold {
+                    recentSpikesPerNeuron[i] &-= decayThreshold
+                } else if recentSpikesPerNeuron[i] > 0 {
+                    recentSpikesPerNeuron[i] = 0
+                }
+            }
+        }
+    }
+
+    @inline(__always) private func emitSpike(from neuron: Int32, at time: Double) {
+        spikeCount += 1
+        spikeEventsThisWindow += 1
+        let ri = Int(neuron)
+        if recentSpikesPerNeuron[ri] < .max { recentSpikesPerNeuron[ri] &+= 1 }
+        // active-neuron counter is reset when the telemetry window rolls
+        let bucket = UInt32(floor((time - windowStartTime) / 1000.0))
+        if activeWindowMark[ri] != bucket {
+            activeWindowMark[ri] = bucket
+            activeNeuronsThisWindow += 1
+        }
+        // smooth firing rate (ms window decay)
+        let rate = dynamics[ri].firingRate
+        dynamics[ri].firingRate = rate * 0.99 + (1000.0 / Float(max(time - dynamics[ri].lastSpikeTime, 1))) * 0.01
+        dynamics[ri].lastSpikeTime = time
+
+        // dispatch to postsynaptic partners (topology from real connectome)
+        let outRange = connectome.outgoingRange(of: Int(neuron))
+        for k in outRange {
+            let syn = connectome.synapses[k]
+            let gain = parameters.synapticGain
+            let efficacy = syn.estimatedEfficacy * gain * Float(syn.synapseCount)
+            let signed = efficacy * (syn.sign < 0 ? -1 : 1)
+            let delayMs = Double(syn.delaySteps) * parameters.dt
+            let arrive = time + delayMs
+            eventSeq &+= 1
+            eventHeap.push(SynapticEvent(time: arrive, seq: eventSeq,
+                                         postNeuron: syn.postNeuron, current: signed,
+                                         transmitter: syn.transmitter))
+        }
+    }
+
+    // MARK: - External inputs (sensors)
+
+    /// Inject a sensory current directly into a neuron (sensory transduction
+    /// layer, spec #3/#9). Signed; positive excitatory, negative inhibitory.
+    public func injectCurrent(into neuron: Int32, current: Float, at time: Double? = nil) {
+        let t = time ?? currentTimeMs
+        eventSeq &+= 1
+        eventHeap.push(SynapticEvent(time: t, seq: eventSeq,
+                                     postNeuron: neuron, current: current,
+                                     transmitter: 0))
+    }
+
+    /// Convenience for spike-driven sensory input: spike `source` → postNeuron
+    /// with given efficacy, used by the odor/vision transduction helpers.
+    public func injectSpikeInput(from source: Int32, to postNeuron: Int32,
+                                 efficacy: Float, delayMs: Double = 1.0) {
+        let t = currentTimeMs + delayMs
+        eventSeq &+= 1
+        eventHeap.push(SynapticEvent(time: t, seq: eventSeq,
+                                     postNeuron: postNeuron, current: efficacy,
+                                     transmitter: 0))
+    }
+
+    // MARK: - Telemetry
+
+    /// Real spikes/sec over the last telemetry window (spec #38 — never faked).
+    public var spikesPerSecond: Double { lastWindowSpikesPerSecond }
+
+    /// Recent spike count of a neuron (for raster/inspector).
+    public func recentSpikes(of neuron: Int32) -> Int {
+        guard neuron >= 0 && Int(neuron) < recentSpikesPerNeuron.count else { return 0 }
+        return Int(recentSpikesPerNeuron[Int(neuron)])
+    }
+
+    public func firingRate(of neuron: Int32) -> Float {
+        guard neuron >= 0 && Int(neuron) < dynamics.count else { return 0 }
+        return dynamics[Int(neuron)].firingRate
+    }
+
+    public func voltage(of neuron: Int32) -> Float {
+        guard neuron >= 0 && Int(neuron) < dynamics.count else { return 0 }
+        return dynamics[Int(neuron)].voltage
+    }
+
+    /// Active neuron count in current window (real).
+    public var activeNeuronCount: Int { Int(activeNeuronsThisWindow) }
+
+    public var pendingEventCount: Int { eventHeap.count }
+
+    // MARK: - Deterministic RNG (xorshift64*)
+
+    @inline(__always) private func nextRandom() -> UInt64 {
+        var x = rngState
+        x ^= x >> 12
+        x ^= x << 25
+        x ^= x >> 27
+        rngState = x
+        return x &* 0x2545F4914F6CDD1D
+    }
+
+    @inline(__always) func randomDouble() -> Double {
+        Double(nextRandom() >> 11) * (1.0 / 9007199254740992.0)
+    }
+
+    // MARK: - Lifecycle / state capture
+
+    /// Snapshot for replay/save (spec #56/#63/#116). Include everything
+    /// needed to resume: clock, RNG, dynamics, heap, telemetry state.
+    public struct EngineSnapshot: Codable, Sendable {
+        public var currentTimeMs: Double
+        public var simulationStep: UInt64
+        public var rngState: UInt64
+        public var spikeCount: UInt64
+        public var eventSeq: UInt64
+        public var dynamics: [NeuronDynamicsSnapshot]
+        public var events: [SynapticEvent]
+    }
+
+    public struct NeuronDynamicsSnapshot: Codable, Sendable {
+        public var voltage: Float
+        public var firingRate: Float
+        public var adaptation: Float
+        public var refractoryRemaining: Float
+        public var lastSpikeTime: Double
+    }
+
+    public func snapshot() -> EngineSnapshot {
+        EngineSnapshot(
+            currentTimeMs: currentTimeMs,
+            simulationStep: simulationStep,
+            rngState: rngState,
+            spikeCount: spikeCount,
+            eventSeq: eventSeq,
+            dynamics: dynamics.map {
+                NeuronDynamicsSnapshot(voltage: $0.voltage, firingRate: $0.firingRate,
+                                       adaptation: $0.adaptation,
+                                       refractoryRemaining: $0.refractoryRemaining,
+                                       lastSpikeTime: $0.lastSpikeTime)
+            },
+            events: eventHeap.allItems
+        )
+    }
+
+    /// Restore from snapshot. Rebuilds the event heap by sorting restored
+    /// events deterministically (heap contents are re-validated by callers).
+    public func restore(_ snap: EngineSnapshot) {
+        currentTimeMs = snap.currentTimeMs
+        simulationStep = snap.simulationStep
+        rngState = snap.rngState
+        spikeCount = snap.spikeCount
+        eventSeq = snap.eventSeq
+        for (i, d) in snap.dynamics.enumerated() {
+            guard i < dynamics.count else { break }
+            dynamics[i].voltage = d.voltage
+            dynamics[i].firingRate = d.firingRate
+            dynamics[i].adaptation = d.adaptation
+            dynamics[i].refractoryRemaining = d.refractoryRemaining
+            dynamics[i].lastSpikeTime = d.lastSpikeTime
+        }
+        eventHeap.rebuild(from: snap.events)
+    }
+}
+
+// MARK: - Neuron model selection helpers
+
+extension NeuralEngine {
+    /// Assign a model level to a neuron (LOD control, spec #48).
+    public func setModelLevel(_ level: UInt8, forNeuron neuron: Int32) {
+        guard neuron >= 0 && Int(neuron) < modelLevels.count else { return }
+        modelLevels[Int(neuron)] = level
+    }
+
+    /// Assign model levels by region (used by adaptive LOD scheduling).
+    public func setModelLevel(_ level: UInt8, forRegion region: RegionID) {
+        for i in 0..<connectome.neuronCount {
+            if RegionID(rawValue: Int(connectome.neurons[i].region)) == region {
+                modelLevels[i] = level
+            }
+        }
+    }
+}

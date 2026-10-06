@@ -1,0 +1,47 @@
+{
+  "dataset": "FAFB/FlyWire-community-fixture",
+  "version": "fixture-v1",
+  "organism": {
+    "species": "Drosophila melanogaster",
+    "sex": "female",
+    "lifeStage": "adult"
+  },
+  "neurons": [
+    {
+      "id": "720575940621039164",
+      "canonical": 0,
+      "region": "medulla",
+      "hemisphere": "right",
+      "cell_type": "Mi1",
+      "transmitter": "cholinergic",
+      "confidence": 0.9,
+      "provenance": "RECONSTRUCTED",
+      "x": 123.4,
+      "y": -55.2,
+      "z": 88.1
+    },
+    {
+      "id": "720575940621039165",
+      "canonical": 1,
+      "region": "lobula",
+      "hemisphere": "right",
+      "cell_type": "T4",
+      "transmitter": "glutamatergic",
+      "confidence": 0.8,
+      "provenance": "RECONSTRUCTED",
+      "x": 100.2,
+      "y": -60.0,
+      "z": 90.0
+    }
+  ],
+  "synapses": [
+    {
+      "pre": "720575940621039164",
+      "post": "720575940621039165",
+      "count": 5,
+      "transmitter": "cholinergic",
+      "confidence": 0.7,
+      "provenance": "MEASURED"
+    }
+  ]
+}

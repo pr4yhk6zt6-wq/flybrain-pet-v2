@@ -29,6 +29,7 @@ class ValidationResult:
 
 
 def validate_dataset(data: dict) -> ValidationResult:
+    """Validate an internal dataset dict (from build_synthetic_demo or ingest)."""
     res = ValidationResult()
     neurons = data["neurons"]
     synapses = data["synapses"]

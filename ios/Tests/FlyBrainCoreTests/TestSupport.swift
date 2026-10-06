@@ -74,3 +74,75 @@ extension Connectome {
         for s in syns { appendSynapse(s) }
     }
 }
+
+// MARK: - Region-aware test connectome
+
+extension TestSupport {
+    /// Build a connectome with neurons grouped into the real biological
+    /// regions (spec #10), so sensory mapping and behavior classification
+    /// tests hit real region targeting.
+    static func regionalConnectome(neuronsPerRegion: Int = 10,
+                                   efficacy: Float = 0.5) -> Connectome {
+        let regions: [RegionID] = [
+            .retinaLeft, .retinaRight, .lamina, .medulla, .lobula, .lobulaPlate,
+            .opticLobe, .antennalLobe, .mushroomBody, .lateralHorn,
+            .centralComplex, .superiorBrain, .subesophagealZone,
+            .cervicalConnective, .ventralNerveCord, .legNeuromere,
+            .wingNeuropil, .haltereNeuropil, .abdominalNeuromere,
+            .endocrineVisceral,
+        ]
+        var neurons: [NeuronRecord] = []
+        var synapses: [SynapseRecord] = []
+        var outgoing: [OutEdgeRange] = []
+
+        var pid = 0
+        for region in regions {
+            for _ in 0..<neuronsPerRegion {
+                neurons.append(NeuronRecord(
+                    canonicalID: Int32(pid),
+                    datasetID: 0,
+                    type: UInt8(pid % 3),
+                    region: UInt8(region.rawValue),
+                    side: (region == .retinaLeft || region == .retinaRight) ? UInt8(region == .retinaLeft ? 1 : 2) : 0,
+                    transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+                    provenance: provIndex(.inferred),
+                    morphologyIndex: -1,
+                    incomingStart: 0, incomingCount: 0,
+                    outgoingStart: 0, outgoingCount: 0,
+                    x: Float(pid), y: 0, z: 0))
+                outgoing.append(OutEdgeRange(start: 0, count: 0))
+                pid += 1
+            }
+        }
+
+        // a few chain synapses to allow propagation (neuron i → i+1),
+        // skipping region boundaries so each region stays contiguous.
+        for idx in 0..<(pid - 1) {
+            if idx % neuronsPerRegion == neuronsPerRegion - 1 { continue } // region boundary
+            let start = Int32(synapses.count)
+            synapses.append(SynapseRecord(preNeuron: Int32(idx), postNeuron: Int32(idx + 1),
+                                          synapseCount: 3,
+                                          transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+                                          sign: Int8(SynapseSign.excitatory.rawValue),
+                                          confidence: 50, delaySteps: 1,
+                                          estimatedEfficacy: efficacy))
+            outgoing[idx] = OutEdgeRange(start: start, count: 1)
+        }
+
+        let header = ConnectomeHeader(
+            magic: 0x46425031, version: 1, flags: 0,
+            neuronCount: Int32(pid), synapseCount: Int32(synapses.count),
+            morphologyCount: 0, regionCount: 0,
+            organism: OrganismInfo(datasetVersion: "test",
+                                   simulatorVersion: "test",
+                                   parameterProfile: "test"),
+            sourceDatasets: ["synthetic-test"],
+            dataProvenance: "SYNTHETIC-DEMO",
+            generationDate: "now", generatedBy: "TestSupport", description: "regional")
+        let c = Connectome(header: header)
+        for n in neurons { c.appendNeuron(n) }
+        c.appendSynapse(contentsOf: synapses)
+        c.setOutgoingRanges(outgoing)
+        return c
+    }
+}

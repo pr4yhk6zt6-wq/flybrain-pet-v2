@@ -1,0 +1,144 @@
+//
+//  SensoryInterface.swift
+//  FlyBrainCore
+//
+//  Sensory transduction layer (spec #9, #28, #45): converts world signals into
+//  synaptic currents injected into specific connectome neurons.
+//
+//  World → sensors (vision/olfaction/gustation/mechano) → sensory neurons →
+//  connectome. This class is the ONLY place world signals enter the brain,
+//  keeping the closed loop clean and inspectable.
+//
+
+import Foundation
+
+/// A generated sensory input event ready for the engine.
+public struct SensoryInput: Sendable {
+    public let neuron: Int32
+    public let current: Float      // signed (excitatory/inhibitory)
+    public let modality: SensoryModality
+    public let strength: Float     // 0..1 normalized intensity
+    public let delayMs: Double
+
+    public init(neuron: Int32, current: Float, modality: SensoryModality,
+                strength: Float, delayMs: Double = 0) {
+        self.neuron = neuron
+        self.current = current
+        self.modality = modality
+        self.strength = strength
+        self.delayMs = delayMs
+    }
+}
+
+public enum SensoryModality: Int, Sendable {
+    case vision = 0
+    case olfaction = 1
+    case gustation = 2
+    case mechanosensation = 3
+    case proprioception = 4
+    case haltere = 5
+    case nociception = 6
+
+    public var name: String {
+        switch self {
+        case .vision: return "vision"
+        case .olfaction: return "olfaction"
+        case .gustation: return "gustation"
+        case .mechanosensation: return "mechanosensation"
+        case .proprioception: return "proprioception"
+        case .haltere: return "haltere"
+        case .nociception: return "nociception"
+        }
+    }
+}
+
+/// Converts sensory events into connectome-targeted currents.
+public struct SensoryInterface {
+    public let connectome: Connectome
+
+    public init(connectome: Connectome) {
+        self.connectome = connectome
+    }
+
+    /// Find an input neuron by region + side + optional cell type filter.
+    /// Returns first match for the exact side, else any side-0 neuron in the
+    /// region (synthetic demo assigns side 0 to most central regions).
+    public func inputNeuron(region: RegionID, side: UInt8,
+                            transmitter: TransmitterType? = nil) -> Int32? {
+        var fallback: Int32? = nil
+        for (idx, n) in connectome.neurons.enumerated() {
+            guard RegionID(rawValue: Int(n.region)) == region else { continue }
+            if let t = transmitter, n.transmitter != UInt8(t.rawValue) { continue }
+            if n.side == side { return Int32(idx) }
+            if n.side == 0 && fallback == nil { fallback = Int32(idx) }
+        }
+        if let f = fallback { return f }
+        return nil
+    }
+
+    /// Inject an odor-concentration input (Left/Right antennal sampling).
+    /// Uses antennal-lobe input neurons; RL stronger than LL; concentration
+    /// drives current via a saturating curve (spec #13).
+    public func odorInput(concentrationL: Float, concentrationR: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let cL = min(max(concentrationL, 0), 1)
+        let cR = min(max(concentrationR, 0), 1)
+        if let n = inputNeuron(region: .antennalLobe, side: 1) {
+            out.append(SensoryInput(neuron: n, current: cL * 40 - 5,
+                                    modality: .olfaction, strength: cL))
+        }
+        if let n = inputNeuron(region: .antennalLobe, side: 2) {
+            out.append(SensoryInput(neuron: n, current: cR * 40 - 5,
+                                    modality: .olfaction, strength: cR))
+        }
+        return out
+    }
+
+    /// Mechanosensory touch input (e.g. leg contact). Targets VNC sensory
+    /// interneurons on the given side (spec #15).
+    public func touchInput(side: UInt8, intensity: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let inten = min(max(intensity, 0), 1)
+        if let n = inputNeuron(region: .legNeuromere, side: side) {
+            out.append(SensoryInput(neuron: n, current: inten * 50,
+                                    modality: .mechanosensation, strength: inten))
+        }
+        return out
+    }
+
+    /// Looming (threat) input → lobula plate / giant-fiber-compatible drive
+    /// (spec #23, escape). High-strength negative/positive current.
+    public func loomingInput(intensity: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let i = min(max(intensity, 0), 1)
+        if let n = inputNeuron(region: .lobulaPlate, side: 0) {
+            out.append(SensoryInput(neuron: n, current: i * 80,
+                                    modality: .vision, strength: i))
+        }
+        return out
+    }
+
+    /// Gustatory input: probe/taste at labellum → SEZ feeding circuits
+    /// (spec #14: approach → probe → taste → evaluate → accept/reject).
+    public func gustatoryInput(acceptance: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let a = min(max(acceptance, -1), 1)
+        if let n = inputNeuron(region: .subesophagealZone, side: 0) {
+            out.append(SensoryInput(neuron: n, current: a * 40,
+                                    modality: .gustation, strength: abs(a)))
+        }
+        return out
+    }
+
+    /// Haltere inertial feedback (spec #16): rotational velocity → VNC
+    /// stability circuits. Sign encodes rotation side.
+    public func haltereInput(rotationRate: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let r = min(max(rotationRate, -1), 1)
+        if let n = inputNeuron(region: .haltereNeuropil, side: 0) {
+            out.append(SensoryInput(neuron: n, current: r * 30,
+                                    modality: .haltere, strength: abs(r)))
+        }
+        return out
+    }
+}

@@ -233,9 +233,10 @@ public final class VisionSystem: @unchecked Sendable {
     }
 
     /// Map a visual event to a connectome input neuron (retinotopic).
-    /// Returns target neuron index and signed current.
+    /// Distributes events across the region's neurons by ommatidium index so
+    /// the input layer is a proper spatial map (spec #11/#12), and limits to
+    /// the strongest events per region+side to avoid flooding the engine.
     public func mapToInput(event: VisualEvent, connectome: Connectome) -> (Int32, Float)? {
-        // pick an input neuron in the matching optic region per side/pathway
         let region: RegionID
         switch event.pathway {
         case .photoreceptor:
@@ -249,16 +250,18 @@ public final class VisionSystem: @unchecked Sendable {
         case .smallObject:
             region = .lobula
         }
-        // drive the first neuron in that region (any side; synthetic demo
-        // assigns side 0 to most central regions) — retina uses side match
-        let wantSide: UInt8 = (region == .retinaLeft) ? 1 : (region == .retinaRight) ? 2 : event.side
+        // collect candidate input neurons in the region (side-matched first)
+        var candidates: [Int32] = []
         var fallback: Int32? = nil
         for (idx, n) in connectome.neurons.enumerated() {
             guard RegionID(rawValue: Int(n.region)) == region else { continue }
-            if n.side == wantSide { return (Int32(idx), event.strength * 10) }
+            if n.side == event.side { candidates.append(Int32(idx)) }
             if n.side == 0 && fallback == nil { fallback = Int32(idx) }
         }
-        if let f = fallback { return (f, event.strength * 10) }
-        return nil
+        if candidates.isEmpty, let f = fallback { candidates = [f] }
+        guard !candidates.isEmpty else { return nil }
+        // retinotopic: pick by ommatidium index modulo the layer size
+        let idx = candidates[event.sourceOmmatidium % candidates.count]
+        return (idx, event.strength * 10)
     }
 }

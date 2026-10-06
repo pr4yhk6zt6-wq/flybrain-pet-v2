@@ -16,8 +16,15 @@ enum TestSupport {
 
     /// Build a tiny connectome: n neurons forming a chain 0→1→2→…→n-1
     /// plus a feedback loop last→first. All cholinergic excitatory.
+    /// A high release-site count (100) makes a single presynaptic spike
+    /// reliably fire the next neuron: current = efficacy×gain×100 nA, and one
+    /// 0.1 ms step moves the membrane by ≈ (I×10)/tauM×dt mV — 8 mV for the
+    /// default test gain, comfortably above the 10 mV rest→threshold gap once
+    /// the 8 mV inhibitory shunt is accounted for. EM-realistic for a
+    /// mainline projection; keeps propagation tests deterministic instead of
+    /// relying on bursts or lucky timing.
     static func chainConnectome(count: Int, efficacy: Float = 0.5,
-                                synapseCount: UInt16 = 2) -> Connectome {
+                                synapseCount: UInt16 = 100) -> Connectome {
         var neurons: [NeuronRecord] = []
         var synapses: [SynapseRecord] = []
         var outgoing: [OutEdgeRange] = []

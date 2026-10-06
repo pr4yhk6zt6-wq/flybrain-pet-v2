@@ -172,10 +172,9 @@ public struct LIFModel: NeuronModel {
     public init() {}
     public mutating func step(dynamics: inout NeuronDynamics, incomingCurrent: Float,
                               dt: Double, spikeNow: Bool) -> Bool {
-        if dynamics.refractoryRemaining > 0 {
-            dynamics.refractoryRemaining -= Float(dt)
-            return false
-        }
+        // refractory window is advanced by the engine (single clock owner) so a
+        // sparse step can never stall the counter
+        if dynamics.refractoryRemaining > 0 { return false }
         let dv = ((dynamics.resting - dynamics.voltage) + incomingCurrent * 10) / dynamics.tauM * Float(dt)
         dynamics.voltage += dv
         if dynamics.voltage >= dynamics.threshold {
@@ -193,10 +192,9 @@ public struct AdExModel: NeuronModel {
     public init() {}
     public mutating func step(dynamics: inout NeuronDynamics, incomingCurrent: Float,
                               dt: Double, spikeNow: Bool) -> Bool {
-        if dynamics.refractoryRemaining > 0 {
-            dynamics.refractoryRemaining -= Float(dt)
-            return false
-        }
+        // refractory window is advanced by the engine (single clock owner) so a
+        // sparse step can never stall the counter
+        if dynamics.refractoryRemaining > 0 { return false }
         // Membrane
         let dv = ((dynamics.resting - dynamics.voltage) + incomingCurrent * 10
                   - dynamics.adaptation) / dynamics.tauM * Float(dt)
@@ -322,6 +320,19 @@ public final class NeuralEngine: @unchecked Sendable {
         let dt = parameters.dt
         let stepTime = currentTimeMs + dt
         simulationStep += 1
+
+        // 0) Advance refractory windows on the real clock. Sparse integration
+        // only *integrates* neurons that received input, but a refractory
+        // window is a property of time, not of input — decaying it inside the
+        // model (touched neurons only) would leave it stalled whenever a
+        // neuron was silent, silently discarding later input. Engine owns the
+        // clock; models only test the flag (spec #63 determinism preserved).
+        for i in 0..<dynamics.count {
+            let r = dynamics[i].refractoryRemaining
+            if r > 0 {
+                dynamics[i].refractoryRemaining = max(0, r - Float(dt))
+            }
+        }
 
         // 1) Deliver all events at or before stepTime
         var touched = [Int32]()

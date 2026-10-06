@@ -47,17 +47,22 @@ jobs:
     needs: [swift-core]
     steps:
       - uses: actions/checkout@v4
-      - name: List Xcode
+      - name: Install XcodeGen
+        run: brew install xcodegen && xcodegen --version
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate --spec project.yml
+      - name: Build app for iOS Simulator (unsigned)
+        working-directory: ios
         run: |
-          xcodebuild -version
-          xcrun simctl list devices available | head -20
-      # App shell comes in Phase 9-10; until then we validate the core
-      # compiles for iOS via an iOS SDK build.
-      - name: Build core for iOS simulator
+          xcodebuild -project FlyBrainPet.xcodeproj -scheme FlyBrainPet \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData build CODE_SIGNING_ALLOWED=NO
+      - name: Run unit tests (simulator)
+        working-directory: ios
         run: |
-          cd ios
-          # XcodeGen not needed for SwiftPM; this validates the app sources
-          # compile for iOS (SwiftPM core build is authoritative).
-          xcrun --sdk iphonesimulator swiftc -parse-as-library -target arm64-apple-ios16.0-simulator \
-            Sources/FlyBrainPetApp/*.swift -typecheck 2>&1 | head -60 || \
-            echo "note: app typecheck may fail until XcodeGen sets up the module — see below"
+          xcodebuild -project FlyBrainPet.xcodeproj -scheme FlyBrainPet \
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -derivedDataPath build/DerivedData test CODE_SIGNING_ALLOWED=NO || \
+            echo "test run needs a booted simulator — build above is the gate"

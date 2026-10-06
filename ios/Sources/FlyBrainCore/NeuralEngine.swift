@@ -83,7 +83,7 @@ public struct SynapticEvent: Codable, Sendable {
 /// Deterministic binary min-heap keyed by (time, seq).
 public struct EventHeap {
     private var items: [SynapticEvent] = []
-    public private(set) var count: Int { get { items.count } set {} }
+    public var count: Int { items.count }
 
     public init() {}
 
@@ -367,7 +367,7 @@ public final class NeuralEngine: @unchecked Sendable {
             activeNeuronsThisWindow = 0
             // sentinel reset — all marks now stale
             activeWindowMark.withUnsafeMutableBufferPointer { buf in
-                buf.initialize(repeating: UInt32.max)
+                buf.assign(repeating: UInt32.max)
             }
         }
 

@@ -124,6 +124,9 @@ public final class World: WorldProvider, @unchecked Sendable {
 
     public func removeAllOdorSources() { odorSources.removeAll() }
 
+    /// Toggle the light set (player interaction — environment only, spec #42).
+    public func removeAllLights() { lights.removeAll() }
+
     // MARK: - WorldProvider (compositionally implements the protocol)
 
     public func luminance(atX: Float, y: Float, z: Float) -> Float {

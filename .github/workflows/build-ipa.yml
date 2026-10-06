@@ -1,21 +1,18 @@
 name: Build iOS .ipa (signed, on demand)
 
-# NOTE: This workflow produces a signed .ipa for device install (iPhone 11+).
-# It runs when triggered manually (workflow_dispatch) or when a release tag
-# is pushed — NOT on every push, to avoid burning macOS runner minutes.
+# Produces a signed iOS .ipa via GitHub macOS runners — no MacBook needed.
+# Runs on manual trigger (workflow_dispatch) or when a version tag is pushed.
 #
-# REQUIREMENTS before this can produce an installable .ipa:
-#   1. The Xcode app shell exists (Phase 9-10: Life Mode + Connectome Mode
-#      Metal renderer + app bundle). Until then the engine compiles but there
-#      is no app to sign — the workflow still runs the build+test stage and
-#      reports status.
-#   2. Add repo secrets (Settings → Secrets and variables → Actions):
-#        APPLE_CERT_BASE64      — distribution cert (.p12) base64
-#        APPLE_CERT_PASSWORD    — cert password
-#        APPLE_PROFILE_BASE64   — provisioning profile (.mobileprovision) base64
-#        APPLE_TEAM_ID          — your Apple Developer team id
-#        APPLE_BUNDLE_ID        — e.g. com.yourname.flybrainpet
-#   3. (No MacBook needed — GitHub macOS runners do the signing.)
+# REQUIREMENTS before an installable .ipa can be produced:
+#   1. Add repo secrets (Settings → Secrets and variables → Actions):
+#        APPLE_CERT_BASE64     — distribution cert (.p12) base64
+#        APPLE_CERT_PASSWORD   — cert password
+#        APPLE_PROFILE_BASE64  — provisioning profile (.mobileprovision) base64
+#        APPLE_TEAM_ID         — Apple Developer team id
+#   2. The XcodeGen project (ios/project.yml) builds the app shell
+#      (Life Mode + Connectome Mode stubs) + FlyBrainCore framework.
+#   3. Run the workflow manually; download the .ipa artifact and install
+#      with a Mac/Apple Configurator/AltStore, or distribute via TestFlight.
 
 on:
   workflow_dispatch:
@@ -25,6 +22,10 @@ on:
         type: choice
         default: 'Release'
         options: [Debug, Release]
+      signing:
+        description: 'Code-sign for device? (req. secrets)'
+        type: boolean
+        default: true
   push:
     tags: ['v*']
 
@@ -34,8 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Decode signing cert + profile
-        if: env.APPLE_CERT_BASE64 != ''
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen || true
+          xcodegen --version
+
+      - name: Decode signing assets
+        if: github.event.inputs.signing != 'false' && env.APPLE_CERT_BASE64 != ''
         env:
           APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
           APPLE_PROFILE_BASE64: ${{ secrets.APPLE_PROFILE_BASE64 }}
@@ -44,60 +50,51 @@ jobs:
           echo "$APPLE_PROFILE_BASE64" | base64 --decode > /tmp/profile.mobileprovision
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp /tmp/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-
-      - name: Import signing certificate
-        if: env.APPLE_CERT_PASSWORD != ''
-        env:
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-        run: |
           security create-keychain -p temp build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p temp build.keychain
-          security import /tmp/cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security import /tmp/cert.p12 -k build.keychain -P "${{ secrets.APPLE_CERT_PASSWORD }}" \
+            -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k temp build.keychain
 
-      - name: Swift core tests (sanity before packaging)
-        run: cd ios && swift build && swift test
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate --spec project.yml
 
-      # ---- app shell build (Phase 9-10). Until the Xcode project exists,
-      # this stage validates that the core compiles for a real iOS device
-      # and assembles a minimal unsigned .ipa for simulator testing.
-      - name: Build core for iOS device SDK
+      - name: Build .ipa (simulator, unsigned) — always
+        working-directory: ios
         run: |
-          cd ios
-          xcrun --sdk iphoneos swiftc -parse-as-library -target arm64-apple-ios16.0 \
-            Sources/FlyBrainCore/*.swift -emit-library -o /tmp/libFlyBrainCore.a
+          xcodebuild -project FlyBrainPet.xcodeproj -scheme FlyBrainPet \
+            -configuration ${{ github.event.inputs.configuration || 'Release' }} \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData build CODE_SIGNING_ALLOWED=NO
 
-      - name: Create Payload + unsigned .ipa (fallback app placeholder)
-        run: |
-          mkdir -p build/Payload
-          cat > build/Info.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>FlyBrainPet</string>
-            <key>CFBundleIdentifier</key><string>com.flybrain.pet</string>
-            <key>CFBundleVersion</key><string>1</string>
-            <key>CFBundleShortVersionString</key><string>0.1.0</string>
-            <key>CFBundleExecutable</key><string>FlyBrainPet</string>
-            <key>MinimumOSVersion</key><string>16.0</string>
-            <key>UIDeviceFamily</key><array><integer>1</integer></array>
-            <key>UILaunchScreen</key><dict/>
-          </dict>
-          </plist>
-          EOF
-
-      - name: Sign (when secrets present)
-        if: env.APPLE_CERT_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+      - name: Build device .ipa (signed)
+        if: github.event.inputs.signing != 'false' && env.APPLE_CERT_PASSWORD != '' && env.APPLE_TEAM_ID != ''
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        working-directory: ios
         run: |
-          echo "Signing with team $APPLE_TEAM_ID (placeholder — real app shell in Phase 9-10)"
+          xcodebuild -project FlyBrainPet.xcodeproj -scheme FlyBrainPet \
+            -configuration ${{ github.event.inputs.configuration || 'Release' }} \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedDataDevice \
+            -allowProvisioningUpdates \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            build
+          # assemble .ipa
+          APP_PATH=$(find build/DerivedDataDevice/Build/Products -name '*.app' | head -1)
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          cd build && zip -qry FlyBrainPet.ipa Payload
 
       - name: Upload .ipa artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlyBrainPet-ipa
-          path: build/Payload/
-          if-no-files-found: ignore
+          path: |
+            ios/build/FlyBrainPet.ipa
+            ios/build/DerivedData/Build/Products/Release-iphonesimulator/*.app
+          if-no-files-found: warn

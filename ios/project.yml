@@ -1,0 +1,67 @@
+# XcodeGen project spec — generates FlyBrainPet.xcodeproj in CI
+# (macOS runner installs xcodegen, then xcodebuild builds/signs the app)
+name: FlyBrainPet
+options:
+  bundleIdPrefix: com.flybrain
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  FlyBrainCore:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Sources/FlyBrainCore
+        excludes:
+          - "Network.hpp"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.flybrain.core
+        DEFINES_MODULE: YES
+  FlyBrainPet:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/FlyBrainPetApp
+      - path: ../data/generated/demo_micro.fbpack
+        buildPhase: resources
+    dependencies:
+      - target: FlyBrainCore
+    info:
+      path: Sources/FlyBrainPetApp/Info.plist
+      properties:
+        CFBundleDisplayName: FlyBrain Pet
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.flybrain.pet
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+  FlyBrainCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/FlyBrainCoreTests
+    dependencies:
+      - target: FlyBrainCore
+schemes:
+  FlyBrainPet:
+    build:
+      targets:
+        FlyBrainPet: all
+        FlyBrainCoreTests: [test]
+    test:
+      targets:
+        - FlyBrainCoreTests

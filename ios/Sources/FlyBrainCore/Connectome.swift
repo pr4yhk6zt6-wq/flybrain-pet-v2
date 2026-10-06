@@ -384,7 +384,11 @@ public final class Connectome: @unchecked Sendable {
 
         // Header
         let hdrData = try readBlockBytes()
-        let header = try JSONDecoder().decode(ConnectomeHeader.self, from: hdrData)
+        // The Python packer pads header JSON to a 16-byte boundary with NULs;
+        // JSONDecoder rejects trailing bytes, so trim them first.
+        var hdrClean = hdrData
+        while hdrClean.last == 0 { hdrClean.removeLast() }
+        let header = try JSONDecoder().decode(ConnectomeHeader.self, from: hdrClean)
         guard header.magic == 0x46425031 else { throw ConnectomeError.badMagic }
         guard header.version == 1 else { throw ConnectomeError.unsupportedVersion(header.version) }
 

@@ -47,11 +47,27 @@ python3 -m pytest python/tests -q            # pipeline tests
 ./scripts/gen_synth_dataset.sh               # regenerate synthetic demo asset
 python3 tools/tests/validate_fbpack.py data/generated/demo_micro.fbpack
 ```
-iOS (macOS with Xcode 15+):
+iOS core (any platform with Swift toolchain):
 ```sh
-cd ios && xcodebuild -scheme FlyBrainCore -destination 'platform=iOS Simulator,name=iPhone 15' test
+cd ios && swift build && swift test          # SwiftPM — runs on macOS AND Linux
 ```
-> Note: this repo currently ships the *core engine + pipeline*. The Xcode app shell (Metal renderer, Life/Connectome modes) is Phase 9–10 — the Swift core is written to be dropped straight into an Xcode project.
+iOS app + Xcode project (generated in CI, or locally on macOS):
+```sh
+brew install xcodegen
+cd ios && xcodegen generate && xcodebuild -project FlyBrainPet.xcodeproj \
+  -scheme FlyBrainPet -destination 'generic/platform=iOS Simulator' build
+```
+
+### Building an .ipa without a MacBook
+The repo's **GitHub Actions** build it for you:
+1. Push to `main` → `CI — Pipeline & Core Tests` runs Python pipeline + Swift core build/test on macOS runners automatically.
+2. Open **Actions → "Build iOS .ipa (signed, on demand)" → Run workflow**.
+3. To sign for a real iPhone (11+), first add repo secrets (Settings → Secrets and variables → Actions):
+   `APPLE_CERT_BASE64` (distribution .p12, base64), `APPLE_CERT_PASSWORD`,
+   `APPLE_PROFILE_BASE64`, `APPLE_TEAM_ID`.
+4. Download the `.ipa` artifact and install (Apple Configurator / AltStore / TestFlight).
+
+Until the signing secrets exist, the workflow still produces an **unsigned simulator build** so the app shell can be tested in the Simulator.
 
 ## License & data
 - Code: MIT (see `LICENSE`).

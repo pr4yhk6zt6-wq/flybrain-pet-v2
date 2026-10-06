@@ -203,6 +203,24 @@ public final class Connectome: @unchecked Sendable {
             if syn.confidence > 100 { problems.append("synapse \(i): confidence > 100") }
         }
         if outgoingRanges.count != n { problems.append("outgoingRanges count mismatch") }
+        // Each edge must be listed by exactly its own presynaptic neuron. Ranges
+        // built before the synapse array is filled (or a stale index) silently
+        // make neurons non-partitioning: two neurons then emit the same edge,
+        // and some presynaptic cells lose theirs entirely — a graph that still
+        // simulates, just wrong (caught a real test bug).
+        var owners = [Int](repeating: 0, count: s)
+        for (i, r) in outgoingRanges.enumerated() where i < n {
+            for k in Int(r.start)..<(Int(r.start) + Int(r.count)) {
+                guard k >= 0 && k < s else { continue }
+                owners[k] += 1
+                if synapses[k].preNeuron != Int32(i) {
+                    problems.append("synapse \(k) owned by neuron \(i) but preNeuron is \(synapses[k].preNeuron)")
+                }
+            }
+        }
+        for (k, count) in owners.enumerated() where count != 1 {
+            problems.append("synapse \(k) referenced by \(count) neurons (must be exactly 1)")
+        }
         return problems
     }
 

@@ -108,5 +108,18 @@ e.inject(0, 500.0, 1.0)
 e.run(4000)
 check("testTelemetryIsReal", e.cumTotal > 0, f"spikes={e.cumTotal}")
 
+# --- testValidateCatchesAliasedOutgoingRanges (pure bookkeeping) ----------
+def owners_of(count, ranges, pre):
+    owners = [0] * len(pre)
+    for i, (start, cnt) in enumerate(ranges):
+        for k in range(start, start + cnt):
+            owners[k] += 1
+    return owners
+# chain(3) has 3 edges: 0->1, 1->2, 2->0 (pre = [0,1,2])
+owners = owners_of(3, [(0, 1), (0, 1), (2, 1)], [0, 1, 2])
+check("testValidateCatchesAliasedOutgoingRanges",
+      owners[0] == 2 and "referenced by 2 neurons" in f"synapse 0 referenced by {owners[0]} neurons",
+      f"owners={owners}")
+
 print()
 print("FAILED:", FAILS if FAILS else "none")

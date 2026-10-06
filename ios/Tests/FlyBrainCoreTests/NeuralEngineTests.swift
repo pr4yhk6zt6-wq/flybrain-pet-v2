@@ -170,6 +170,10 @@ final class NeuralEngineTests: XCTestCase {
                          provenance: TestSupport.provIndex(.inferred),
                          morphologyIndex: -1, incomingStart: 0, incomingCount: 0,
                          outgoingStart: 0, outgoingCount: 0, x: 0, y: 0, z: 0), edges: 0)
+        // Synapses first — OutEdgeRange start/count indexes into this array, so
+        // building the ranges before appending synapses would make several
+        // neurons alias the same edge (this exact mistake made the inhibitory
+        // veto test drive neuron 2 *harder* instead of silencing it).
         synapses.append(SynapseRecord(preNeuron: 0, postNeuron: 2, synapseCount: 100,
                                       transmitter: UInt8(TransmitterType.cholinergic.rawValue),
                                       sign: Int8(SynapseSign.excitatory.rawValue),
@@ -178,6 +182,10 @@ final class NeuralEngineTests: XCTestCase {
                                       transmitter: UInt8(TransmitterType.gabaergic.rawValue),
                                       sign: Int8(SynapseSign.inhibitory.rawValue),
                                       confidence: 50, delaySteps: 1, estimatedEfficacy: 2.5))
+        // now the ranges: neuron 0 owns edge [0,1), neuron 1 owns edge [1,2)
+        outgoing.append(OutEdgeRange(start: 0, count: 1))
+        outgoing.append(OutEdgeRange(start: 1, count: 1))
+        outgoing.append(OutEdgeRange(start: 2, count: 0))
 
         let header = ConnectomeHeader(magic: 0x46425031, version: 1, flags: 0,
                                       neuronCount: 3, synapseCount: 2, morphologyCount: 0, regionCount: 0,
@@ -251,9 +259,22 @@ final class NeuralEngineTests: XCTestCase {
                       "orphan edge must be flagged")
     }
 
+    func testValidateCatchesAliasedOutgoingRanges() {
+        // Two neurons pointing at synapse 0: one edge is emitted twice and the
+        // other presynaptic cell loses its output entirely. The graph still
+        // "runs", so nothing but validation can catch it (regression guard for
+        // a wiring bug that broke the inhibitory veto test).
+        let c = TestSupport.chainConnectome(count: 3)
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 1),
+                             OutEdgeRange(start: 0, count: 1),
+                             OutEdgeRange(start: 2, count: 1)])
+        let problems = c.validate()
+        XCTAssertTrue(problems.contains { $0.contains("referenced by 2 neurons") },
+                      "aliased outgoing ranges must be flagged: \(problems)")
+    }
+
     func testCSRLayoutValid() {
-        let c = TestSupport.chainConnectome(count: 10)
-        XCTAssertTrue(c.validateCSR().isEmpty)
+        XCTAssertTrue(TestSupport.chainConnectome(count: 10).validateCSR().isEmpty)
     }
 
     func testTelemetryIsReal() {

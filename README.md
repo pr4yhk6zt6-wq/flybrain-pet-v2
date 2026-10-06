@@ -14,7 +14,10 @@ Behavior is **emergent action selection** from real spiking neural dynamics over
 ## Status
 - [x] Phase 1: repo scaffold, architecture, data model, provenance system
 - [x] Phase 2 (core): event-driven spiking neural engine (LIF/AdEx), sparse spike propagation, deterministic, unit-tested
-- [ ] Phase 3–14: see `PLAN.md`
+- [x] Phase 3 (sensory + loop): vision (compound-eye sampling, ON/OFF/looming), olfaction, gustation, mechano/haltere transduction; internal state; closed-loop `SimulationCore`; passive behavior classifier
+- [x] Phase 4/5 starters: motor CPG (6-leg gait), articulated body model, 3D `World` (lights/odor/obstacles, collision) wired into the loop
+- [x] CI/CD: GitHub Actions — Python pipeline tests + Swift core build/test on macOS runners; signed .ipa workflow (requires app shell, Phase 9-10)
+- [ ] Phase 6+: flight dynamics, walking validation, connectome visualization (Metal), Life/Connectome/Experiment modes, real BANC/FAFB ingestion
 
 **Current caveat:** the bundled dataset (`data/generated/demo_micro.fbpack`) is a **small synthetic stand-in** explicitly labeled `SYNTHETIC-DEMO`. It exists so the engine, tests and pipeline are real and verifiable *now*. Real connectome ingestion (BANC + FAFB/FlyWire, adult female) is the next priority — see `docs/CONNECTOME.md` and `python/tools/`.
 

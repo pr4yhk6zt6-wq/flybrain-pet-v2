@@ -253,6 +253,9 @@ public final class NeuralEngine: @unchecked Sendable {
     public private(set) var recentSpikesPerNeuron: [UInt16]
     private var recentWindowSeconds: Double = 1.0
 
+    /// Cumulative spikes per neuron (never decayed) — for tests/inspector.
+    public private(set) var cumulativeSpikes: [UInt32]
+
     public private(set) var activeNeuronsThisWindow: Int32 = 0
     private var activeWindowMark: [UInt32]
 
@@ -272,6 +275,7 @@ public final class NeuralEngine: @unchecked Sendable {
         self.modelLevels = [UInt8](repeating: 1, count: n)
         self.spikeAccumulator = [Float](repeating: 0, count: n)
         self.recentSpikesPerNeuron = [UInt16](repeating: 0, count: n)
+        self.cumulativeSpikes = [UInt32](repeating: 0, count: n)
         // Sentinel so the first spike of second-bucket 0 is counted.
         self.activeWindowMark = [UInt32](repeating: UInt32.max, count: n)
 
@@ -385,6 +389,7 @@ public final class NeuralEngine: @unchecked Sendable {
         spikeEventsThisWindow += 1
         let ri = Int(neuron)
         if recentSpikesPerNeuron[ri] < .max { recentSpikesPerNeuron[ri] &+= 1 }
+        if cumulativeSpikes[ri] < .max { cumulativeSpikes[ri] &+= 1 }
         // active-neuron counter is reset when the telemetry window rolls
         let bucket = UInt32(floor((time - windowStartTime) / 1000.0))
         if activeWindowMark[ri] != bucket {
@@ -444,6 +449,12 @@ public final class NeuralEngine: @unchecked Sendable {
     public func recentSpikes(of neuron: Int32) -> Int {
         guard neuron >= 0 && Int(neuron) < recentSpikesPerNeuron.count else { return 0 }
         return Int(recentSpikesPerNeuron[Int(neuron)])
+    }
+
+    /// Total spikes of a neuron since engine start (never decays).
+    public func totalSpikes(of neuron: Int32) -> Int {
+        guard neuron >= 0 && Int(neuron) < cumulativeSpikes.count else { return 0 }
+        return Int(cumulativeSpikes[Int(neuron)])
     }
 
     public func firingRate(of neuron: Int32) -> Float {

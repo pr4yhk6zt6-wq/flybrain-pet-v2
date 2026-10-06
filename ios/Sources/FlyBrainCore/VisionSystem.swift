@@ -150,21 +150,17 @@ public final class VisionSystem: @unchecked Sendable {
     public func worldTarget(ommatidium i: Int, position: (Float, Float, Float),
                             pose: FlyPose, range: Float = 10) -> (Float, Float, Float) {
         let om = ommatidia[i]
-        // rotate optical axis by pose basis
-        let basisR = (pose.forwardX, pose.forwardY, pose.forwardZ)
-        let basisU = (pose.upX, pose.upY, pose.upZ)
-        // right vector = up × forward
-        let rx = basisU.1 * basisR.2 - basisU.2 * basisR.1
-        let ry = basisU.2 * basisR.0 - basisU.0 * basisR.2
-        let rz = basisU.0 * basisR.1 - basisU.1 * basisR.0
-        let dir = (
-            om.axisX * basisR.0 + om.axisY * rx + om.axisZ * basisU.0,
-            om.axisX * basisR.1 + om.axisY * ry + om.axisZ * basisU.1,
-            om.axisX * basisR.2 + om.axisY * rz + om.axisZ * basisU.2
+        // rotate optical axis by pose basis: dir = axisX·f + axisY·r + axisZ·u
+        let f = SIMD3(pose.forwardX, pose.forwardY, pose.forwardZ)
+        let u = SIMD3(pose.upX, pose.upY, pose.upZ)
+        let r = FlyMath.cross(u, f)               // right = up × forward
+        let axis = SIMD3(om.axisX, om.axisY, om.axisZ)
+        let dir = FlyMath.normalize(
+            axis.x * f + axis.y * r + axis.z * u
         )
-        return (position.0 + dir.0 * range,
-                position.1 + dir.1 * range,
-                position.2 + dir.2 * range)
+        return (position.0 + dir.x * range,
+                position.1 + dir.y * range,
+                position.2 + dir.z * range)
     }
 
     /// Advance one sensory sample (dt ms). Calls the luminance provider,

@@ -35,6 +35,15 @@ public final class SimulationCore: @unchecked Sendable {
     /// World provider (weak to avoid retain cycles; the view owns the world).
     public weak var world: WorldProvider?
 
+    /// Concrete 3D world object when created in-app (spec #29).
+    /// When set, it is also assigned as the `world` provider.
+    public private(set) var scene: World?
+
+    public func setScene(_ w: World) {
+        scene = w
+        world = w
+    }
+
     // Fly pose/position (embodiment, spec #18)
     public private(set) var position: SIMD3<Float> = SIMD3(0, 0, 1)
     public private(set) var forward: SIMD3<Float> = SIMD3(1, 0, 0)
@@ -116,11 +125,11 @@ public final class SimulationCore: @unchecked Sendable {
         readMotorDrive()
         motor.update(neuralDrive: neuralDrive, dt: dt)
 
-        // 5) Body integration (Phase 5): apply motor output to the articulated
-        //    body with reduced-order physics; proprioception feeds back into
-        //    sensory (haltere/mechano). Currently a kinematic placeholder —
-        //    the body tracks target joint angles from motor output.
+        // 5) Body integration + world interaction (spec #30): apply motor
+        //    output to the articulated body; move the fly; collide with
+        //    obstacles; sample world back into senses (close the loop).
         integrateBody(dt: dt)
+        integrateLocomotion(dt: dt)
 
         // 6) Internal physiology
         internalState.advance(dtMs: dt, activityLevel: activityLevel)
@@ -165,13 +174,13 @@ public final class SimulationCore: @unchecked Sendable {
             body.legs[i].tibia.angle = motor.legs[i].tibia.angle
         }
         // Wings from output (spec #19)
-        let freq = motor.output.wingStrokeFreq
-        let t = engine.currentTimeMs
-        let phase = Float(t.truncatingRemainder(dividingBy: 1000) / 1000)
+        let freq = motor.output.wingStrokeFreq          // Hz (up to ~180)
+        let tMs = engine.currentTimeMs
+        let phaseRad = Float(tMs / 1000.0) * 2 * .pi * max(freq, 1)   // full cycles
         for i in 0..<body.wings.count {
             let amp = motor.output.wingStrokeAmplitude
-            body.wings[i].strokeAngle.angle = amp * sin(2 * .pi * freq * phase / 180)
-            body.wings[i].rotationAngle.angle = amp * 0.3 * cos(2 * .pi * freq * phase / 180)
+            body.wings[i].strokeAngle.angle = amp * sin(phaseRad)
+            body.wings[i].rotationAngle.angle = amp * 0.3 * cos(phaseRad)
         }
         // Halteres follow wing beat (inertial feedback, spec #16)
         let hb = motor.output.haltereBeat
@@ -183,6 +192,33 @@ public final class SimulationCore: @unchecked Sendable {
         // Antennae follow head orientation placeholder
         body.leftAntenna.angle = 0.2 + motor.output.antennaAngle
         body.rightAntenna.angle = -0.2 + motor.output.antennaAngle
+    }
+
+    /// Phase-5 locomotion: moves the fly from motor output (six-legged gait)
+    /// through the world with collision. Velocity scales with leg torque.
+    private func integrateLocomotion(dt: Double) {
+        // walking speed from motor output (leg torques sum)
+        let legDrive = motor.output.legTorques.reduce(0, +) / 6
+        let walkSpeed: Float = 8.0   // mm/s max (fly ~ several body lengths/s)
+        // heading: straight forward with small turn from L/R asymmetry
+        let turn = motor.output.leftRightAsymmetry * 0.5
+        let heading = atan2(forward.y, forward.x) + turn * Float(dt)
+        let dir = SIMD3(cos(heading), sin(heading), 0)
+        forward = dir
+        var pos = position + dir * (walkSpeed * legDrive * Float(dt))
+        // gravityless walking plane; world collision resolves obstacles
+        scene?.resolveCollision(position: &pos)
+        position = pos
+
+        // proprioception feedback (spec #15): leg contact → mechano input
+        if let w = world {
+            // ground contact squeeze — feed a weak mechano tone into VNC
+            let legContact = legDrive > 0.05 ? 0.3 : 0.0
+            let touchInputs = sensory.touchInput(side: 1, intensity: legContact)
+            for t in touchInputs {
+                engine.injectCurrent(into: t.neuron, current: t.current, at: engine.currentTimeMs)
+            }
+        }
     }
 
     /// Energetic cost of activity (0..1) — placeholder for body work.
@@ -203,8 +239,8 @@ public final class SimulationCore: @unchecked Sendable {
 
     public func setPose(position: SIMD3<Float>, forward: SIMD3<Float>, up: SIMD3<Float>) {
         self.position = position
-        self.forward = simd_normalize(forward)
-        self.up = simd_normalize(up)
+        self.forward = FlyMath.normalize(forward)
+        self.up = FlyMath.normalize(up)
     }
 }
 

@@ -12,13 +12,17 @@ Repo: `pr4yhk6zt6-wq/flybrain-pet-v2` (started empty — scaffolded from scratch
 
 ## Phase breakdown (from #100 / #107)
 1. **Repository audit + scaffold** — done: empty repo, created architecture + core.
-2. **Connectome data pipeline** — Python → compact binary assets (`.fbpack`). Current: synthetic compact dataset (identified as such) + real FlyWire pilot support.
-3. **Spiking neural simulator** — LIF/AdEx event-driven core (this commit).
-4. Sensory interfaces (vision/olfaction/gustation/mechano).
-5. Motor system + articulated body model (skeleton, wings, halteres).
-6. Walking / 7. Flight / 8. Closed-loop world physics.
+2. **Connectome data pipeline** — Python → compact binary assets (`.fbpack`). Current: synthetic compact dataset (identified as such) + real FlyWire pilot ingestion framework.
+3. **Spiking neural simulator + sensory systems** — LIF/AdEx event-driven core; vision (compound eye ON/OFF/looming), olfaction, gustation, mechano/haltere transduction, internal state, closed-loop SimulationCore (this commit).
+4. **Motor system + articulated body** — MotorSystem CPG (6-leg gait, wings, halteres, proboscis) + BodyModel (head/thorax/abdomen/eyes/legs/wings/halteres) wired into the loop (starters).
+5. **3D world** — World (lights, odor sources, obstacles, collision) implements WorldProvider; synchronous with the loop.
+6. Walking validation / 7. Flight / 8. Closed-loop physics.
 9. Connectome visualization (Metal instanced points; no decorative spikes).
 10. Life Mode / 11. Experiment Mode / 12. Optimize / 13. Validate / 14. Polish.
+
+## CI/CD (no MacBook needed)
+- `.github/workflows/ci.yml`: Python pipeline tests (ubuntu) + Swift core build/test (macOS runner, SwiftPM `ios/Package.swift`).
+- `.github/workflows/build-ipa.yml`: signed .ipa build (manual trigger / release tag) — needs app shell (Phase 9-10) + signing secrets (see file header).
 
 ## Real connectome data strategy (live research)
 - Target: **BANC** (brain+VNC, adult female — closest to spec #1) + **FAFB/FlyWire** for lamina/ocellar regions absent from BANC (spec #4).

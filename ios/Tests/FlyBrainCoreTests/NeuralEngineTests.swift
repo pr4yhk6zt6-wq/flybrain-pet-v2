@@ -50,7 +50,7 @@ final class NeuralEngineTests: XCTestCase {
 
         XCTAssertGreaterThan(engine.spikeCount, 0, "chain must produce spikes")
         // Neuron 4 (motor end) should have fired — the whole chain propagated
-        XCTAssertGreaterThan(engine.recentSpikes(of: 4), 0,
+        XCTAssertGreaterThan(engine.totalSpikes(of: 4), 0,
                              "chain of 5 must propagate excitation to neuron 4")
     }
 
@@ -85,6 +85,7 @@ final class NeuralEngineTests: XCTestCase {
         let a = run(seed: 7)
         let b = run(seed: 999)
         XCTAssertNotEqual(a, b, "different seeds should generally produce different spike trains")
+    }
     }
 
     func testInhibitorySynapseSuppressesDownstream() {
@@ -150,13 +151,14 @@ final class NeuralEngineTests: XCTestCase {
             if withVeto { e2.injectCurrent(into: 1, current: 400, at: 1.0) }
             e2.injectCurrent(into: 0, current: 400, at: 2.0)
             e2.run(steps: 2500)
-            return e2.recentSpikes(of: 2)
+            return e2.totalSpikes(of: 2)
         }
         let withVeto = runControl(withVeto: true)
         let withoutVeto = runControl(withVeto: false)
         XCTAssertLessThan(withVeto, withoutVeto,
                           "inhibitory veto must suppress downstream firing")
-    }
+        // sanity: at least some spikes exist in control
+        XCTAssertGreaterThan(withoutVeto, 0)
 
     func testSnapshotRestoreRoundTrip() {
         let c = TestSupport.chainConnectome(count: 6)

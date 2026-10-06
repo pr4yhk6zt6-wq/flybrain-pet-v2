@@ -15,13 +15,17 @@ final class SensoryTests: XCTestCase {
     private final class TestWorld: WorldProvider {
         func luminance(atX: Float, y: Float, z: Float) -> Float {
             // bright blob in front-center
-            let d = sqrt(x * x + y * y + z * z)
+            let d = sqrt(atX * atX + y * y + z * z)
             return d < 3 ? 1 : 0.05
         }
         func odorConcentration(atX: Float, y: Float, z: Float) -> (left: Float, right: Float) {
-            (0.5, 0.5)
+            _ = (atX, y, z)
+            return (0.5, 0.5)
         }
-        func temperature(atX: Float, y: Float, z: Float) -> Float { 25 }
+        func temperature(atX: Float, y: Float, z: Float) -> Float {
+            _ = (atX, y, z)
+            return 25
+        }
     }
 
     func testCompoundEyeBuildsOmmatidia() {

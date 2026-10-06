@@ -367,7 +367,7 @@ public final class NeuralEngine: @unchecked Sendable {
             activeNeuronsThisWindow = 0
             // sentinel reset — all marks now stale
             activeWindowMark.withUnsafeMutableBufferPointer { buf in
-                buf.assign(repeating: UInt32.max)
+                buf.update(repeating: UInt32.max)
             }
         }
 

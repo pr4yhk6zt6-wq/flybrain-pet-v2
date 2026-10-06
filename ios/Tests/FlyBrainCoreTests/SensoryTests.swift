@@ -99,15 +99,20 @@ final class SensoryTests: XCTestCase {
     }
 
     func testBehaviorClassifierObservesOnly() {
-        let c = TestSupport.chainConnectome(count: 30)
+        let c = TestSupport.regionalConnectome(neuronsPerRegion: 8)
         var params = SimulationParameters()
         params.seed = 3
         let core = SimulationCore(connectome: c, parameters: params)
-        core.run(steps: 500)
-        // classifier never crashes; produces some label
-        let _ = core.behavior
-        // after driving leg neuropils, classifier may report walking; the key
-        // invariant: classifier has no mutating backdoor into the sim.
-        XCTAssertTrue(core.behavior.current != .unknown || core.engine.spikeCount > 0)
+        // drive a leg-neuromere neuron → classifier should eventually see
+        // limb activity (passive observation, spec #44)
+        if let leg = core.sensory.inputNeuron(region: .legNeuromere, side: 0) {
+            TestSupport.driveBurst(engine: core.engine, neuron: leg,
+                                   startMs: 1.0, pulses: 30, intervalMs: 10, current: 400)
+        }
+        core.run(steps: 1500)
+        // neural activity must exist (real spikes)
+        XCTAssertGreaterThan(core.engine.spikeCount, 0)
+        // classifier remains a pure observer: no backdoor into the sim
+        XCTAssertNotNil(core.behavior.current)
     }
 }

@@ -44,9 +44,13 @@ final class NeuralEngineTests: XCTestCase {
         params.synapticGain = 5.0    // strong enough to fire downstream
         let engine = NeuralEngine(connectome: c, parameters: params)
 
-        // Drive neuron 0 with a strong current pulse
-        engine.injectCurrent(into: 0, current: 400, at: 1.0)
-        engine.run(steps: 2000)      // 200 ms
+        // Drive neuron 0 with a burst (repeated synaptic drive at 50 Hz —
+        // a single pulse is biologically unrealistic and decays before
+        // reaching the end of a 5-neuron chain).
+        TestSupport.driveBurst(engine: engine, neuron: 0,
+                               startMs: 1.0, pulses: 20, intervalMs: 20,
+                               current: 400)
+        engine.run(steps: 3000)      // 300 ms
 
         XCTAssertGreaterThan(engine.spikeCount, 0, "chain must produce spikes")
         // Neuron 4 (motor end) should have fired — the whole chain propagated
@@ -61,7 +65,9 @@ final class NeuralEngineTests: XCTestCase {
             params.seed = seed
             params.synapticGain = 4
             let engine = NeuralEngine(connectome: c, parameters: params)
-            engine.injectCurrent(into: 0, current: 350, at: 2.0)
+            TestSupport.driveBurst(engine: engine, neuron: 0,
+                                   startMs: 2.0, pulses: 15, intervalMs: 15,
+                                   current: 350)
             engine.run(steps: 3000)
             return (engine.spikeCount, engine.currentTimeMs)
         }
@@ -78,7 +84,9 @@ final class NeuralEngineTests: XCTestCase {
             params.seed = seed
             params.synapticGain = 4
             let engine = NeuralEngine(connectome: c, parameters: params)
-            engine.injectCurrent(into: 0, current: 350, at: 2.0)
+            TestSupport.driveBurst(engine: engine, neuron: 0,
+                                   startMs: 2.0, pulses: 15, intervalMs: 15,
+                                   current: 350)
             engine.run(steps: 3000)
             return engine.spikeCount
         }
@@ -137,19 +145,24 @@ final class NeuralEngineTests: XCTestCase {
         params.seed = 3
         var engine = NeuralEngine(connectome: c, parameters: params)
         // fire neuron 1 (inhibitory) BEFORE neuron 0's excitation arrives
-        engine.injectCurrent(into: 1, current: 400, at: 1.0)  // veto neuron
-        engine.injectCurrent(into: 0, current: 400, at: 2.0)  // driver
+        TestSupport.driveBurst(engine: engine, neuron: 1, startMs: 1.0,
+                               pulses: 15, intervalMs: 15, current: 400)  // veto
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 5.0,
+                               pulses: 15, intervalMs: 15, current: 400)  // driver
         engine.run(steps: 2500)
 
         // Neuron 2's firing (if any) must be weaker than without the veto.
-        // We can't easily assert "zero" for a stochastic net; assert the veto
-        // lowered firing: compare against control run without neuron 1 spike.
+        // Compare against control run without neuron 1 spikes.
         func runControl(withVeto: Bool) -> Int {
             var p2 = SimulationParameters()
             p2.seed = 3
             let e2 = NeuralEngine(connectome: c, parameters: p2)
-            if withVeto { e2.injectCurrent(into: 1, current: 400, at: 1.0) }
-            e2.injectCurrent(into: 0, current: 400, at: 2.0)
+            if withVeto {
+                TestSupport.driveBurst(engine: e2, neuron: 1, startMs: 1.0,
+                                       pulses: 15, intervalMs: 15, current: 400)
+            }
+            TestSupport.driveBurst(engine: e2, neuron: 0, startMs: 5.0,
+                                   pulses: 15, intervalMs: 15, current: 400)
             e2.run(steps: 2500)
             return e2.totalSpikes(of: 2)
         }
@@ -165,7 +178,8 @@ final class NeuralEngineTests: XCTestCase {
         var params = SimulationParameters()
         params.seed = 11
         let engineA = NeuralEngine(connectome: c, parameters: params)
-        engineA.injectCurrent(into: 0, current: 380, at: 1.0)
+        TestSupport.driveBurst(engine: engineA, neuron: 0, startMs: 1.0,
+                               pulses: 12, intervalMs: 20, current: 380)
         engineA.run(steps: 1000)
 
         let snap = engineA.snapshot()
@@ -208,7 +222,8 @@ final class NeuralEngineTests: XCTestCase {
         params.seed = 5
         params.synapticGain = 5
         let engine = NeuralEngine(connectome: c, parameters: params)
-        engine.injectCurrent(into: 0, current: 500, at: 1.0)
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                               pulses: 18, intervalMs: 25, current: 500)
         engine.run(steps: 4000)  // 400 ms → crosses a telemetry window at 1000ms
         // spikesPerSecond must reflect actual firing, not a placeholder
         XCTAssertEqual(engine.spikesPerSecond >= 0, true)

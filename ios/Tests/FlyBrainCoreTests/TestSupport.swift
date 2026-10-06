@@ -75,6 +75,21 @@ extension Connectome {
     }
 }
 
+// MARK: - Burst drive helper (realistic repeated synaptic drive)
+
+extension TestSupport {
+    /// Inject a train of current pulses (a burst) into a neuron — repeated
+    /// drive like real presynaptic input, so chains propagate (spec #6/#28).
+    static func driveBurst(engine: NeuralEngine, neuron: Int32,
+                           startMs: Double, pulses: Int, intervalMs: Double,
+                           current: Float) {
+        for i in 0..<pulses {
+            engine.injectCurrent(into: neuron, current: current,
+                                 at: startMs + Double(i) * intervalMs)
+        }
+    }
+}
+
 // MARK: - Region-aware test connectome
 
 extension TestSupport {

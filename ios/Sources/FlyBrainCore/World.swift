@@ -148,13 +148,11 @@ public final class World: WorldProvider, @unchecked Sendable {
         var totalL: Float = 0
         var totalR: Float = 0
         for o in odorSources {
-            let c = o.concentration(at: p)
             // small bilateral offset — antennas are ~0.18 mm apart (spec #13)
             totalL += o.concentration(at: p + SIMD3(0, 0.18, 0))
             totalR += o.concentration(at: p + SIMD3(0, -0.18, 0))
-            _ = c
         }
-        return (min(totalL, 1), min(totalR, 1))
+        return (left: min(totalL, 1), right: min(totalR, 1))
     }
 
     public func temperature(atX: Float, y: Float, z: Float) -> Float {

@@ -214,7 +214,7 @@ public final class SimulationCore: @unchecked Sendable {
         if let w = world {
             // ground contact squeeze — feed a weak mechano tone into VNC
             let legContact = legDrive > 0.05 ? 0.3 : 0.0
-            let touchInputs = sensory.touchInput(side: 1, intensity: legContact)
+            let touchInputs = sensory.touchInput(side: 1, intensity: Float(legContact))
             for t in touchInputs {
                 engine.injectCurrent(into: t.neuron, current: t.current, at: engine.currentTimeMs)
             }

@@ -53,8 +53,8 @@ public struct RateDetector {
     }
 
     public mutating func advance() {
-        // exponential decay window
-        let decay = exp(-dtMs / tauMs)
+        // exponential decay window (Foundation exp is Double; convert)
+        let decay = Float(exp(Double(-dtMs / tauMs)))
         for i in 0..<rates.count {
             rates[i] *= decay
         }

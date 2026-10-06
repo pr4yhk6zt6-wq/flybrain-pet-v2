@@ -66,12 +66,12 @@ public final class PlasticityManager: @unchecked Sendable {
         var s = states[synapseIndex]
         let dt = Float(dtMs)
         // Tsodyks-Markram update on event
-        let u = s.facilitation + (0.1 - s.facilitation) * (1 - exp(-dt / s.tauFacilitation))
-        let R = s.depression + (1 - s.depression) * (1 - exp(-dt / s.tauDepression))
+        let u = s.facilitation + (0.1 - s.facilitation) * Float(1 - exp(Double(-dt / s.tauFacilitation)))
+        let R = s.depression + (1 - s.depression) * Float(1 - exp(Double(-dt / s.tauDepression)))
         s.facilitation = u
         s.depression = max(R - u * R, 0)        // resource consumed by this event
         s.currentEfficacy = s.baselineEfficacy * s.learningWeight * u * R
-        s.lastUpdateTime = s.lastUpdateTime + dt
+        s.lastUpdateTime = s.lastUpdateTime + Double(dt)
         states[synapseIndex] = s
     }
 
@@ -89,7 +89,7 @@ public final class PlasticityManager: @unchecked Sendable {
         var da: Float = 0
         dopamineQueue.removeAll { $0.time < time - 1000 }
         for sig in dopamineQueue where sig.scope == -1 || sig.scope == post {
-            da += sig.magnitude * exp(-Float(time - sig.time) / 500)
+            da += sig.magnitude * Float(exp(Double(-(time - sig.time) / 500)))
         }
         // Full implementation walks the CSR synapse ranges for (pre→post);
         // here we demonstrate the gate on the synapse population.

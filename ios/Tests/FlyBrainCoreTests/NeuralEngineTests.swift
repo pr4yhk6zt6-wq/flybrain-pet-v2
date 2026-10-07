@@ -355,8 +355,14 @@ final class NeuralEngineTests: XCTestCase {
         let engine = NeuralEngine(connectome: c, parameters: params)
         TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
                                pulses: 20, intervalMs: 50, current: 400)
-        engine.run(steps: 10000)   // 1000 ms
-        XCTAssertGreaterThan(engine.recentSpikes(of: 0), 1,
+        // Sample the window as it fills: reading only at the end would read
+        // AFTER the 1 s window rolls (and correctly clears), not a failure.
+        var peak = 0
+        for _ in 0..<20 {                 // 20 × 50 ms = the first window
+            engine.run(steps: 500)
+            peak = max(peak, engine.recentSpikes(of: 0))
+        }
+        XCTAssertGreaterThan(peak, 1,
                              "the 1 s window must hold more than a single spike")
         // and it must drain once the window rolls with no further drive
         engine.run(steps: 20000)

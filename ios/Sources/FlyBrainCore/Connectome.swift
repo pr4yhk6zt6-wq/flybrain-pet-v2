@@ -455,6 +455,11 @@ public final class Connectome: @unchecked Sendable {
             func i32(_ o: Int) -> Int32 { Int32(littleEndian: neuronData.subdata(in: (off+o)..<(off+o+4)).withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }) }
             func f32(_ o: Int) -> Float { Float(bitPattern: UInt32(littleEndian: neuronData.subdata(in: (off+o)..<(off+o+4)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })) }
             func u8(_ o: Int) -> UInt8 { neuronData[off + o] }
+            // The u16 reader must be declared INSIDE this loop too: the synapse
+            // loop below declares its own `u16`, and a nested func is scoped to
+            // its loop body, so this one is not visible and `type: u16(10)`
+            // fails to compile ("cannot find 'u16' in scope").
+            func u16(_ o: Int) -> UInt16 { UInt16(littleEndian: neuronData.subdata(in: (off+o)..<(off+o+2)).withUnsafeBytes { $0.loadUnaligned(as: UInt16.self) }) }
             let n = NeuronRecord(
                 canonicalID: i32(0), datasetID: u8(4), type: u16(10), region: u8(5),
                 // v2 field order after `region` is side, transmitter, provenance,

@@ -10,13 +10,19 @@ import Foundation
 
 /// Provenance classification for every biological attribute.
 /// Mirror of the pipeline taxonomy in python/flybrain/pid.py
+/// How a value was obtained. The wire form (`.fbpack` header `dataProvenance`)
+/// is the uppercase name, matching `flybrain.pid.Provenance` on the Python
+/// side: Swift's implicit rawValue for `case inferred` would be "inferred" and
+/// an uppercase "INFERRED" from the pipeline would decode to nil. The rawValues
+/// are therefore stated explicitly, and a cross-language test loads a
+/// Python-written asset in CI to keep the two definitions from drifting.
 public enum Provenance: String, Codable, Sendable, CaseIterable {
-    case measured       // "MEASURED"
-    case reconstructed  // "RECONSTRUCTED"
-    case inferred       // "INFERRED"
-    case predicted      // "PREDICTED"
-    case approximated   // "APPROXIMATED"
-    case unknown        // "UNKNOWN"
+    case measured = "MEASURED"
+    case reconstructed = "RECONSTRUCTED"
+    case inferred = "INFERRED"
+    case predicted = "PREDICTED"
+    case approximated = "APPROXIMATED"
+    case unknown = "UNKNOWN"
 
     public var displayName: String { rawValue }
 }

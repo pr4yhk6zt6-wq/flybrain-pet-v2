@@ -54,12 +54,20 @@ final class FBPackCrossLanguageTests: XCTestCase {
         XCTAssertGreaterThan(c.neuronCount, 0, "asset must contain neurons")
         XCTAssertGreaterThan(c.synapseCount, 0, "asset must contain synapses")
         // Provenance is carried as the enum NAME on the wire, so it must
-        // arrive as a readable string, not a bare integer.
+        // arrive as a readable string, not a bare integer — and spelled the way
+        // the pipeline spells it. Swift's implicit rawValue for `case inferred`
+        // would be "inferred" while Python writes "INFERRED", which decodes to
+        // nil; the rawValues are now stated explicitly so the two agree.
         XCTAssertFalse(c.header.dataProvenance.isEmpty,
                        "dataProvenance must survive as a non-empty string")
         XCTAssertNotNil(Provenance(rawValue: c.header.dataProvenance),
                         "dataProvenance must be a valid Provenance name, got "
                         + "'\(c.header.dataProvenance)'")
+        XCTAssertEqual(c.header.dataProvenance, c.header.dataProvenance.uppercased(),
+                       "the wire form is the uppercase enum NAME, as the Python "
+                       + "pipeline writes it")
+        XCTAssertEqual(Provenance.allCases.count, 6,
+                       "Python's Provenance has 6 members; keep the two in step")
     }
 
     /// The two formats must agree on layout, not just on decoding.

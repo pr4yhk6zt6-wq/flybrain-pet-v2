@@ -250,12 +250,35 @@ public final class NeuralEngine: @unchecked Sendable {
     // Recent spike ring buffer for raster/inspector (unaligned, cheap)
     public private(set) var recentSpikesPerNeuron: [UInt16]
     private var recentWindowSeconds: Double = 1.0
+    private var recentWindowStartTime: Double = 0
 
     /// Cumulative spikes per neuron (never decayed) — for tests/inspector.
     public private(set) var cumulativeSpikes: [UInt32]
 
     public private(set) var activeNeuronsThisWindow: Int32 = 0
     private var activeWindowMark: [UInt32]
+
+    /// Indices of neurons whose refractory window is still open. Maintained
+    /// incrementally — a neuron is added when it spikes and dropped when its
+    /// window closes — so the per-step cost is O(active), not O(neurons). On
+    /// whole-BANC (153,746 neurons) the previous unconditional sweep over
+    /// every neuron ran once per 0.1 ms step regardless of activity, which
+    /// contradicts the event-driven design (spec #46) and is the single
+    /// largest per-step cost on a real connectome.
+    private var refractoryRing: [Int32] = []
+
+    /// Index of every neuron whose recent-spike counter is non-zero, with the
+    /// same incremental discipline. Only these can decay; a full sweep also
+    /// conflated two clocks (the counter was scaled to a 1 s window but
+    /// decremented as if the window were one step, so any count below 2500
+    /// was wiped to zero every 10 ms — see the decay code in `step()`).
+    private var recentRing: [Int32] = []
+
+    /// Scratch buffers reused across steps. Allocating a fresh Set and Array
+    /// per step was the other hot-loop heap cost; `step()` has a single owner
+    /// and is not reentrant, so reuse is safe.
+    private var stepTouched: [Int32] = []
+    private var stepTouchedSet: Set<Int32> = []
 
     /// AdEx model shared for whole-network LOD1.
     private var adex = AdExModel()
@@ -327,26 +350,42 @@ public final class NeuralEngine: @unchecked Sendable {
         // model (touched neurons only) would leave it stalled whenever a
         // neuron was silent, silently discarding later input. Engine owns the
         // clock; models only test the flag (spec #63 determinism preserved).
-        for i in 0..<dynamics.count {
-            let r = dynamics[i].refractoryRemaining
-            if r > 0 {
-                dynamics[i].refractoryRemaining = max(0, r - Float(dt))
+        //
+        // Done over the active set, not over every neuron: nothing else can
+        // have a non-zero window, so this is identical in result and O(active)
+        // instead of O(neurons) per step.
+        if !refractoryRing.isEmpty {
+            let decay = Float(dt)
+            var w = 0
+            for k in 0..<refractoryRing.count {
+                let i = Int(refractoryRing[k])
+                let r = dynamics[i].refractoryRemaining
+                // Keep the invariant that the ring holds EXACTLY the neurons
+                // with an open window: anything that has reached 0 (or was
+                // never refractory) is dropped, so a zero-length refractory
+                // period cannot leak entries forever.
+                if r > 0 {
+                    let next = max(0, r - decay)
+                    dynamics[i].refractoryRemaining = next
+                    if next > 0 { refractoryRing[w] = refractoryRing[k]; w += 1 }
+                }
             }
+            refractoryRing.removeLast(refractoryRing.count - w)
         }
 
         // 1) Deliver all events at or before stepTime
-        var touched = [Int32]()
-        var touchedSet = Set<Int32>()
+        stepTouched.removeAll(keepingCapacity: true)
+        stepTouchedSet.removeAll(keepingCapacity: true)
         var delivered = 0
         while let ev = eventHeap.top, ev.time <= stepTime, delivered < parameters.maxEventsPerStep {
             _ = eventHeap.pop()
             spikeAccumulator[Int(ev.postNeuron)] += ev.current
-            if touchedSet.insert(ev.postNeuron).inserted { touched.append(ev.postNeuron) }
+            if stepTouchedSet.insert(ev.postNeuron).inserted { stepTouched.append(ev.postNeuron) }
             delivered += 1
         }
 
         // 2) Integrate touched neurons (sparse — untrouched stay at rest)
-        for idx in touched {
+        for idx in stepTouched {
             let i = Int(idx)
             let current = spikeAccumulator[i]
             spikeAccumulator[i] = 0
@@ -382,16 +421,22 @@ public final class NeuralEngine: @unchecked Sendable {
             }
         }
 
-        // decay recent-spike ring
-        if simulationStep % 100 == 0 {
-            let decayThreshold = UInt16(max(1, Int(recentWindowSeconds * 1000.0 / dt) / 4))
-            for i in 0..<recentSpikesPerNeuron.count {
-                if recentSpikesPerNeuron[i] > decayThreshold {
-                    recentSpikesPerNeuron[i] &-= decayThreshold
-                } else if recentSpikesPerNeuron[i] > 0 {
-                    recentSpikesPerNeuron[i] = 0
-                }
+        // decay recent-spike ring. The field means "spikes in a 1 s window"
+        // (recentWindowSeconds), so it is a tumbling window exactly like
+        // spikesPerSecond below: entries accumulate and are cleared when the
+        // window rolls. The previous code instead decremented by a quarter of
+        // the window *expressed in steps* every 100 steps — with the defaults
+        // that is a decay of 2500 on a counter holding single-digit counts, so
+        // recentSpikes() (the motor drive's only real input, spec #20) read 0
+        // for every neuron on every frame, and the doc's "1 s" window was
+        // physically 10 ms. Clearing only the non-zero entries keeps this
+        // O(active) on a whole-BANC connectome.
+        if currentTimeMs - recentWindowStartTime >= recentWindowSeconds * 1000.0 {
+            for k in 0..<recentRing.count {
+                recentSpikesPerNeuron[Int(recentRing[k])] = 0
             }
+            recentRing.removeAll(keepingCapacity: true)
+            recentWindowStartTime = currentTimeMs
         }
     }
 
@@ -399,6 +444,7 @@ public final class NeuralEngine: @unchecked Sendable {
         spikeCount += 1
         spikeEventsThisWindow += 1
         let ri = Int(neuron)
+        if recentSpikesPerNeuron[ri] == 0 { recentRing.append(neuron) }
         if recentSpikesPerNeuron[ri] < .max { recentSpikesPerNeuron[ri] &+= 1 }
         if cumulativeSpikes[ri] < .max { cumulativeSpikes[ri] &+= 1 }
         // active-neuron counter is reset when the telemetry window rolls
@@ -406,6 +452,15 @@ public final class NeuralEngine: @unchecked Sendable {
         if activeWindowMark[ri] != bucket {
             activeWindowMark[ri] = bucket
             activeNeuronsThisWindow += 1
+        }
+        // register the refractory window in the active set. No "is it already
+        // tracked?" test is needed: a neuron only reaches a spike while its
+        // window is closed (the models return false while refractory > 0) and
+        // the ring holds exactly the open windows, so the spiking neuron is
+        // guaranteed absent. The models have already set refractoryRemaining by
+        // the time this runs, so testing it here would always be false.
+        if dynamics[ri].tauRefractory > 0 {
+            refractoryRing.append(neuron)
         }
         // smooth firing rate (ms window decay)
         let rate = dynamics[ri].firingRate
@@ -464,6 +519,13 @@ public final class NeuralEngine: @unchecked Sendable {
 
     /// Real spikes/sec over the last telemetry window (spec #38 — never faked).
     public var spikesPerSecond: Double { lastWindowSpikesPerSecond }
+
+    /// Indices the engine is currently tracking as refractory (test/telemetry
+    /// access to the incremental active set — kept exact in `step()`).
+    public var refractoryActiveNeurons: [Int32] { refractoryRing }
+
+    /// Indices whose recent-spike counter is non-zero.
+    public var recentActiveNeurons: [Int32] { recentRing }
 
     /// Recent spike count of a neuron (for raster/inspector).
     public func recentSpikes(of neuron: Int32) -> Int {
@@ -563,6 +625,19 @@ public final class NeuralEngine: @unchecked Sendable {
             dynamics[i].lastSpikeTime = d.lastSpikeTime
         }
         eventHeap.rebuild(from: snap.events)
+
+        // Rebuild the two active sets from the restored state. They are
+        // derived data, so recomputing them is cheaper and safer than
+        // serialising them (and a stale set would silently stop decaying a
+        // restored refractory window, or keep visiting neurons that are zero).
+        refractoryRing.removeAll(keepingCapacity: true)
+        recentRing.removeAll(keepingCapacity: true)
+        for i in 0..<dynamics.count where dynamics[i].refractoryRemaining > 0 {
+            refractoryRing.append(Int32(i))
+        }
+        for i in 0..<recentSpikesPerNeuron.count where recentSpikesPerNeuron[i] > 0 {
+            recentRing.append(Int32(i))
+        }
     }
 }
 

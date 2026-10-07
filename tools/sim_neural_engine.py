@@ -39,6 +39,7 @@ class Engine:
         self.tauRef = [2.0] * n
         self.refr = [0.0] * n
         self.cum = [0] * n
+        self.recent = [0] * n
         self.lastSpike = [-1e18] * n
         self.time = 0.0
         self.cumTotal = 0
@@ -47,6 +48,16 @@ class Engine:
         # out-neighbours: list of (post, current)
         self.out = syn_out or [[] for _ in range(n)]
         self.touched = set()
+        # Active sets, mirroring the Swift engine's incremental maintenance:
+        # `refractoryRing` holds exactly the neurons with an open refractory
+        # window, `recentRing` exactly those with a non-zero recent-spike
+        # counter. The Swift step walks these instead of sweeping all n
+        # neurons every step, so the mirror must do the same to stay a faithful
+        # parity check (and to expose any divergence in results).
+        self.refractoryRing = []
+        self.recentRing = []
+        self.recentWindowMs = 1000.0
+        self.recentWindowStart = 0.0
 
     # --- xorshift64* -------------------------------------------------------
     def nextRandom(self):
@@ -77,7 +88,17 @@ class Engine:
         # FIXED ENGINE: refractory counters decay every step, not only when
         # the neuron happens to receive input (sparse integration otherwise
         # leaves counters stalled and silently discards burst input).
-        self.refr = [max(0.0, r - dt) if r > 0 else 0.0 for r in self.refr]
+        # Done over the active set (identical result, O(active) not O(n)).
+        if self.refractoryRing:
+            kept = []
+            for i in self.refractoryRing:
+                r = self.refr[i]
+                if r > 0:
+                    nxt = max(0.0, r - dt)
+                    self.refr[i] = nxt
+                    if nxt > 0:
+                        kept.append(i)
+            self.refractoryRing = kept
         while self.heap and self.heap[0][0] <= stepTime:
             t, s, post, cur = heapq.heappop(self.heap)
             acc[post] = acc.get(post, 0.0) + cur
@@ -93,13 +114,26 @@ class Engine:
             if self.v[i] >= self.threshold:
                 self.v[i] = self.reset
                 self.refr[i] = self.tauRef[i]
+                if self.tauRef[i] > 0:
+                    self.refractoryRing.append(i)
                 self.w[i] += self.a[i]
                 self.emit(i, stepTime)
+        # tumbling recent-spike window (see Swift: the old decay wiped any
+        # counter below 2500 to zero every 10 ms, so recentSpikes() — the
+        # motor drive's only real input — always read 0)
+        if (stepTime - self.recentWindowStart) >= self.recentWindowMs:
+            for i in self.recentRing:
+                self.recent[i] = 0
+            self.recentRing = []
+            self.recentWindowStart = stepTime
         self.time = stepTime
 
     def emit(self, neuron, time):
         self.cum[neuron] += 1
         self.cumTotal += 1
+        if self.recent[neuron] == 0:
+            self.recentRing.append(neuron)
+        self.recent[neuron] += 1
         for (post, cur) in self.out[neuron]:
             self.push(time + self.dt, post, cur)   # delaySteps=1 -> dt ms
 

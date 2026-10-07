@@ -147,5 +147,41 @@ unpol = target_spikes(0)
 check("testUnpolarisedSynapseCarriesNoCurrent",
       exc > 0 and unpol == 0, f"excitatory target spikes={exc} unpolarised={unpol}")
 
+
+# --- recent-spike window must actually hold spikes ------------------------
+# The counter is documented as a 1 s window and is the ONLY real input to the
+# motor system (SimulationCore.readMotorDrive), yet the old decay subtracted
+# 2500 every 10 ms, so every entry below 2500 was wiped to zero and
+# recentSpikes() read 0 for every neuron on every frame. Drive a steady burst
+# and assert the window stays populated for its full documented duration.
+w = mk(3, 0.5, 100, 1.0, 3)
+driveBurst(w, 0, 1.0, 20, 50, 400)      # spikes spread over ~1000 ms
+w.run(3000)                              # 300 ms of sim: first spikes emitted
+peak = 0
+for _ in range(7000):                    # to 1000 ms
+    w.step()
+    peak = max(peak, w.recent[0])
+check("testRecentSpikeWindowHoldsSpikes",
+      peak > 1, f"peak recent[0]={peak} (old code: 0 or 1, never more)")
+
+# and it must drain once the window rolls
+for _ in range(20000):                   # past 1 s of silence
+    w.step()
+check("testRecentSpikeWindowDrains", w.recent[0] == 0, f"after idle recent[0]={w.recent[0]}")
+
+# --- sparse active sets must not change results ---------------------------
+# The engine now walks only the active sets instead of sweeping all neurons.
+# Prove the sets are exactly consistent with the underlying arrays after a
+# mixed run (empty == no stale entries, full == nothing missed).
+s = mk(6, 0.6, 100, 3.0, 11)
+driveBurst(s, 0, 1.0, 8, 30, 500)
+s.run(5000)
+ring_ok = all(s.refr[i] > 0 for i in s.refractoryRing) and \
+    all(s.refr[i] == 0 for i in range(s.n) if i not in set(s.refractoryRing))
+recent_ok = all(s.recent[i] > 0 for i in s.recentRing) and \
+    all(s.recent[i] == 0 for i in range(s.n) if i not in set(s.recentRing))
+check("testActiveSetsStayConsistent", ring_ok and recent_ok,
+      f"refrRing={s.refractoryRing} recentRing={s.recentRing} refr={s.refr}")
+
 print()
 print("FAILED:", FAILS if FAILS else "none")

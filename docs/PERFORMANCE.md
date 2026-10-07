@@ -9,6 +9,18 @@
 ## Neural core efficiency
 
 - Event-driven: p-sparse — quiescent neurons cost ~0 per step
+- No per-step sweep over all neurons. Refractory windows and the recent-spike
+  counters are held in two incremental active sets (`refractoryRing`,
+  `recentRing`), each containing exactly the neurons with a non-zero value:
+  a neuron is added when it spikes and dropped when the value returns to 0.
+  A whole-BANC connectome is 153,746 neurons, so an unconditional sweep ran
+  once per 0.1 ms step regardless of activity — the largest per-step cost on
+  real data, and a direct contradiction of the p-sparse claim above. Both
+  sets are rebuilt from the state on `restore()` (they are derived data).
+- The hot step reuses two scratch buffers instead of allocating a fresh
+  Array + Set per step.
+- `recentSpikesPerNeuron` is a tumbling 1 s window (like `spikesPerSecond`),
+  cleared when the window rolls and only over the non-zero entries.
 - Packed records (44 B neuron, 20 B synapse), contiguous arrays
 - CSR outgoing adjacency for spike dispatch
 - No per-object heap allocation in the hot loop

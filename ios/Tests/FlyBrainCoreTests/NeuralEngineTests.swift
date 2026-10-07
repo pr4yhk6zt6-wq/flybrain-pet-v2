@@ -341,6 +341,57 @@ final class NeuralEngineTests: XCTestCase {
         XCTAssertTrue(TestSupport.chainConnectome(count: 10).validateCSR().isEmpty)
     }
 
+    func testRecentSpikeWindowHoldsAndDrains() {
+        // recentSpikes() is the ONLY real input to the motor system
+        // (SimulationCore.readMotorDrive), and the field is documented as a 1 s
+        // window. The old decay subtracted a quarter of the window *in steps*
+        // (2500) every 100 steps, so any counter below 2500 was wiped to zero
+        // every 10 ms — recentSpikes() read 0 for every neuron on every frame
+        // and the window was physically 10 ms, not 1 s. Drive a burst whose
+        // spikes span ~1 s and assert the window actually accumulates.
+        let c = TestSupport.chainConnectome(count: 3, efficacy: 0.5)
+        var params = SimulationParameters()
+        params.seed = 3
+        let engine = NeuralEngine(connectome: c, parameters: params)
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                               pulses: 20, intervalMs: 50, current: 400)
+        engine.run(steps: 10000)   // 1000 ms
+        XCTAssertGreaterThan(engine.recentSpikes(of: 0), 1,
+                             "the 1 s window must hold more than a single spike")
+        // and it must drain once the window rolls with no further drive
+        engine.run(steps: 20000)
+        XCTAssertEqual(engine.recentSpikes(of: 0), 0,
+                       "an idle window must drain to zero")
+    }
+
+    func testActiveSetsStayConsistentWithState() {
+        // `step()` now walks only the active sets instead of sweeping all
+        // neurons every step (the O(neurons) sweep was the largest per-step
+        // cost on whole-BANC: 153,746 neurons × every 0.1 ms step). The
+        // optimisation is only valid if the sets are EXACTLY the non-zero
+        // entries — a stale entry would decay something forever, and a missing
+        // one would stop decaying a live window.
+        let c = TestSupport.chainConnectome(count: 6, efficacy: 0.6)
+        var params = SimulationParameters()
+        params.seed = 11
+        params.synapticGain = 3
+        let engine = NeuralEngine(connectome: c, parameters: params)
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                               pulses: 8, intervalMs: 30, current: 500)
+        engine.run(steps: 5000)
+
+        let refrSet = Set(engine.refractoryActiveNeurons)
+        let recentSet = Set(engine.recentActiveNeurons)
+        for i in 0..<c.neuronCount {
+            let tracked = refrSet.contains(Int32(i))
+            XCTAssertEqual(tracked, engine.dynamics[i].refractoryRemaining > 0,
+                           "refractory set must match the state exactly (neuron \(i))")
+            let recentTracked = recentSet.contains(Int32(i))
+            XCTAssertEqual(recentTracked, engine.recentSpikes(of: Int32(i)) > 0,
+                           "recent set must match the state exactly (neuron \(i))")
+        }
+    }
+
     func testTelemetryIsReal() {
         let c = TestSupport.chainConnectome(count: 4, efficacy: 0.9)
         var params = SimulationParameters()

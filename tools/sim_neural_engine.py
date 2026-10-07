@@ -10,7 +10,8 @@ Mirrored exactly:
   dw = (b*(v - rest) - w) / tauAdapt * dt
   spike -> v = reset; refractory = tauRefractory; w += spikeTriggeredAdaptation
   noise = (rand*2-1) * noiseScale * tauM   (consumed once per touched neuron)
-  synapse current = efficacy * gain * synapseCount * sign
+  synapse current = efficacy * gain * synapseCount * polarity,
+                    polarity = +1 / -1 / 0 (sign 0 = unpolarised, no event)
   retain(): drop events with t <= currentTime; keep the rest (parent rebuilds heap)
 """
 import heapq
@@ -132,6 +133,15 @@ def chain(count, efficacy=0.5, synapseCount=100, gain=1.0, dt=0.1):
         e.b[i] = 0.5
         e.a[i] = 2.0
     return e
+
+
+def edge_current(efficacy, gain, synapseCount, sign):
+    """Mirror of the engine's dispatch: a sign of 0 carries no current at all,
+    so the caller must not enqueue an event for it."""
+    polarity = 1 if sign > 0 else (-1 if sign < 0 else 0)
+    if polarity == 0:
+        return None
+    return efficacy * gain * synapseCount * polarity
 
 
 def driveBurst(e, neuron, startMs, pulses, intervalMs, current):

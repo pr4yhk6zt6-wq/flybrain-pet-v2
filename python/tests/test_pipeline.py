@@ -5,9 +5,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from flybrain.pack import pack
+from flybrain.pack import _region_bytes, pack
 from flybrain.pid import (
     Provenance,
+    RegionBounds,
     RegionID,
     TransmitterType,
     build_synthetic_demo,
@@ -21,6 +22,20 @@ def test_synthetic_build_is_consistent():
     assert res.ok, res.summarize()
     assert data["header"].organism["sex"] == "female"
     assert data["header"].organism["species"] == "Drosophila melanogaster"
+
+
+def test_region_record_layout_28_bytes():
+    # RegionBounds is read by the Swift loader at a fixed 28-byte stride
+    # (u8 region; 3 pad; 6 x f32 min/max XYZ). The loader advanced 32 bytes per
+    # record — invisible on the synthetic demo, which has 0 regions, but fatal
+    # on a real asset. Pin both the record size and the field order.
+    b = _region_bytes(RegionBounds(region=7, minX=-1.5, minY=-2.5, minZ=-3.5,
+                                   maxX=1.25, maxY=2.25, maxZ=3.25))
+    assert len(b) == 28
+    assert b[0] == 7
+    assert b[1:4] == b"\x00\x00\x00", "3 pad bytes after the region id"
+    got = struct.unpack_from("<6f", b, 4)
+    assert got == (-1.5, -2.5, -3.5, 1.25, 2.25, 3.25)
 
 
 def test_neuron_record_layout_44_bytes():

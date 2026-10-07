@@ -189,7 +189,7 @@ final class NeuralEngineTests: XCTestCase {
                          morphologyIndex: -1, incomingStart: 0, incomingCount: 0,
                          outgoingStart: 0, outgoingCount: 0, x: 0, y: 0, z: 0), edges: 0)
 
-        let header = ConnectomeHeader(magic: 0x46425031, version: 1, flags: 0,
+        let header = ConnectomeHeader(magic: 0x46425031, version: 2, flags: 0,
                                       neuronCount: 3, synapseCount: 2, morphologyCount: 0, regionCount: 0,
                                       organism: OrganismInfo(datasetVersion: "t", simulatorVersion: "t", parameterProfile: "t"),
                                       sourceDatasets: ["synthetic-test"], dataProvenance: "SYNTHETIC-DEMO",
@@ -221,6 +221,68 @@ final class NeuralEngineTests: XCTestCase {
                           "inhibitory veto must suppress downstream firing")
         // sanity: the control really does drive neuron 2
         XCTAssertGreaterThan(withoutVeto, 0)
+    }
+
+    func testUnpolarisedSynapseCarriesNoCurrent() {
+        // sign 0 means UNPOLARISED (the transmitter was unpredicted, or is one
+        // whose valence is genuinely unknown, e.g. glutamate in the fly CNS).
+        // The engine used to collapse 0 to +1 (`sign < 0 ? -1 : 1`), silently
+        // exciting the target; on the real BANC release that mislabelled 9.3%
+        // of the synaptic weight. Both graphs below are identical except for
+        // the sign, so only the polarity can explain a difference.
+        //   neuron 0 (driver) -> neuron 1
+        //   neuron 2 (driver) -> neuron 3
+        func build(sign: Int8) -> Connectome {
+            var neurons: [NeuronRecord] = []
+            var synapses: [SynapseRecord] = []
+            var outgoing: [OutEdgeRange] = []
+            var cursor: Int32 = 0
+            func add(edges: Int32) {
+                let i = neurons.count
+                neurons.append(NeuronRecord(
+                    canonicalID: Int32(i), datasetID: 0, type: 0, region: 9, side: 0,
+                    transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+                    provenance: TestSupport.provIndex(.inferred),
+                    morphologyIndex: -1, incomingStart: 0, incomingCount: 0,
+                    outgoingStart: 0, outgoingCount: 0, x: 0, y: 0, z: 0))
+                outgoing.append(OutEdgeRange(start: cursor, count: edges))
+                cursor += edges
+            }
+            synapses.append(SynapseRecord(preNeuron: 0, postNeuron: 1, synapseCount: 1000,
+                                          transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+                                          sign: sign, confidence: 50, delaySteps: 1,
+                                          estimatedEfficacy: 0.9))
+            add(edges: 1)   // 0
+            add(edges: 0)   // 1
+            add(edges: 0)   // 2
+            let header = ConnectomeHeader(magic: 0x46425031, version: 2, flags: 0,
+                                          neuronCount: 3, synapseCount: 1, morphologyCount: 0, regionCount: 0,
+                                          organism: OrganismInfo(datasetVersion: "t", simulatorVersion: "t", parameterProfile: "t"),
+                                          sourceDatasets: ["synthetic-test"], dataProvenance: "SYNTHETIC-DEMO",
+                                          generationDate: "now", generatedBy: "t", description: "sign 0")
+            let c = Connectome(header: header)
+            for n in neurons { c.appendNeuron(n) }
+            c.appendSynapse(contentsOf: synapses)
+            c.setOutgoingRanges(outgoing)
+            return c
+        }
+
+        func targetSpikes(sign: Int8) -> Int {
+            var p = SimulationParameters()
+            p.seed = 5
+            let engine = NeuralEngine(connectome: build(sign: sign), parameters: p)
+            TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                                   pulses: 15, intervalMs: 15, current: 500)
+            engine.run(steps: 2000)
+            return engine.totalSpikes(of: 1)
+        }
+
+        let excitatory = targetSpikes(sign: Int8(SynapseSign.excitatory.rawValue))
+        let unpolarised = targetSpikes(sign: 0)
+        XCTAssertGreaterThan(excitatory, 0,
+                             "an excitatory edge must drive its target (control)")
+        XCTAssertEqual(unpolarised, 0,
+                       "a sign-0 synapse must carry no current, not excitation")
     }
 
     func testSnapshotRestoreRoundTrip() {

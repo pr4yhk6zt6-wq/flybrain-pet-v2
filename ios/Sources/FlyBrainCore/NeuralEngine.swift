@@ -416,9 +416,18 @@ public final class NeuralEngine: @unchecked Sendable {
         let outRange = connectome.outgoingRange(of: Int(neuron))
         for k in outRange {
             let syn = connectome.synapses[k]
+            // sign is +1 excitatory, -1 inhibitory, 0 UNPOLARISED. A 0 must
+            // carry NO current: the old `sign < 0 ? -1 : 1` collapsed 0 to +1
+            // and silently asserted excitation for every unpolarised edge —
+            // 9.3% of BANC's synaptic weight (2.2M synapses, all the empty
+            // transmitter predictions and, after the fix in flying/banc.py,
+            // all glutamatergic ones). The edge stays in the connectome; only
+            // its valence is absent.
+            let polarity: Float = syn.sign > 0 ? 1 : (syn.sign < 0 ? -1 : 0)
+            guard polarity != 0 else { continue }
             let gain = parameters.synapticGain
             let efficacy = syn.estimatedEfficacy * gain * Float(syn.synapseCount)
-            let signed = efficacy * (syn.sign < 0 ? -1 : 1)
+            let signed = efficacy * polarity
             let delayMs = Double(syn.delaySteps) * parameters.dt
             let arrive = time + delayMs
             eventSeq &+= 1

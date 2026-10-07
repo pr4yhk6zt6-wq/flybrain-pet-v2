@@ -29,8 +29,33 @@ supplies those. Cross-dataset ID mapping retains provenance (spec #4).
 Cholinergic, GABAergic, glutamatergic, dopaminergic, serotonergic,
 octopaminergic, tyraminergic, peptidergic, histaminergic, unknown.
 Sign is not implied by transmitter: `SynapseRecord.sign` is stored explicitly
-(excitatory/inhibitory/modulatory) with confidence, because fly-specific effects
-can differ from vertebrate intuitions.
+(excitatory +1 / inhibitory −1 / **unpolarised 0**) with confidence, because
+fly-specific effects can differ from vertebrate intuitions.
+
+### What each transmitter's inferred sign is, and why
+
+The BANC release predicts a transmitter per neuron but no valence, so the sign
+is inferred from the label. Three of the ten labels do NOT map onto a fast
+excitatory/inhibitory current, and treating them as "excitatory by default"
+is the single largest source of invented activity in the model:
+
+| label | sign | basis |
+|---|---|---|
+| ACh | +1 | cation-permeant nicotinic AChR (fast EPSP) |
+| GABA | −1 | Rdl GABA-gated Cl⁻ channel — the canonical fast inhibitor |
+| **HIST** | **−1** | histamine-gated **Cl⁻** channels (hclA/ort, HisCl1/2) hyperpolarise lamina L1–L3 (Gengs 2002 PMID 12196539; Zheng 2002 PMID 11714703) |
+| **GLUT** | **0** | BOTH exist: ionotropic GluR is excitatory (the larval NMJ is glutamatergic and excitatory — Jan & Jan 1976 PMID 186587) and GluClα is inhibitory (Liu & Wilson 2013 PNAS PMID 23729809). Valence is cell-type-specific, so a bare "GLUT" cannot decide it. |
+| DA / SER / OCT / TYR | 0 | GPCR-only families in Drosophila (DopR/DopEcR, 5-HT1/2/7, OAMB/OctβR, TyrR/TAR1) — no fast current to model. The ionotropic amine-gated channels (MOD-1, LGC-55) are *C. elegans*, not fly. |
+| peptidergic | 0 | slow neuromodulation |
+| unknown (unpredicted) | 0 | no evidence for either polarity |
+
+`unpolarised` (0) means **the edge carries no fast current** — the engine skips
+it — NOT "excitatory with a small weight". On banc-888 that is 59.4% of synaptic
+weight (GABA −1 40.6%; ACh +1 none of it; the rest 0), so the sign convention is
+load-bearing: reading 0 as +1 asserts 2.2M excitatory synapses that were never
+measured. What the simulator loses by zeroing a GPCR/peptidergic edge is
+neuromodulation, and that is recorded as a limitation rather than silently
+folded into excitation.
 
 ## Sensory → neural → motor pathways represented
 

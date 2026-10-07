@@ -7,15 +7,25 @@ Wire format (little-endian, fixed offsets; mirrors Swift Connectome.swift):
     [u64 neuronBytes][NeuronRecord × neuronCount]      stride 44
     [u64 synapseBytes][SynapseRecord × synapseCount]   stride 20
     [u64 rangeBytes][OutEdgeRange × neuronCount]       stride 8
-    [u64 regionBytes][RegionBounds × regionCount]      stride 32
+    [u64 regionBytes][RegionBounds × regionCount]      stride 28
 
-NeuronRecord (44): i32 canonicalID; u8 datasetID,type,region,side,transmitter,
-    provenance; pad2; i32 morphologyIndex,incomingStart,incomingCount,
-    outgoingStart,outgoingCount; f32 x,y,z
+NeuronRecord (44): i32 canonicalID; u8 datasetID,region,side,transmitter,
+    provenance; u8 flags; u16 type; i32 morphologyIndex,incomingStart,
+    incomingCount,outgoingStart,outgoingCount; f32 x,y,z
+    (byte offsets: id 0, datasetID 4, region 5, side 6, transmitter 7,
+     provenance 8, flags 9, type 10, morphology 12, in 16/20, out 24/28,
+     x 32, y 36, z 40 — pinned by python/tests/test_banc.py)
+
+The cell-type field is u16, not u8: the real BANC release carries 11,566
+distinct cell types, which a u8 vocabulary would silently alias into 256
+buckets. The two pad bytes that used to follow provenance now hold the high
+half of the wider field plus a reserved flags byte, so the stride and every
+later offset are unchanged. Header version is 2; a version-1 asset is rejected
+rather than misread.
 SynapseRecord (20): i32 pre, post; u16 synapseCount; u8 transmitter; i8 sign;
     u8 confidence, delaySteps; pad2; f32 estimatedEfficacy
 OutEdgeRange (8): i32 start, count
-RegionBounds (32): u8 region; pad3; f32 minX..maxZ
+RegionBounds (28): u8 region; pad3; f32 minX..maxZ
 """
 
 from __future__ import annotations
@@ -31,9 +41,9 @@ from .pid import ConnectomeHeader, NeuronRecord, OutEdgeRange, RegionBounds, Syn
 
 def _neuron_bytes(n: NeuronRecord) -> bytes:
     return struct.pack(
-        "<iBBBBBB2xiiiii3f",
-        n.canonicalID, n.datasetID, n.type, n.region, n.side,
-        n.transmitter, n.provenance,
+        "<iBBBBBBHiiiii3f",
+        n.canonicalID, n.datasetID, n.region, n.side,
+        n.transmitter, n.provenance, 0, n.type,
         n.morphologyIndex, n.incomingStart, n.incomingCount,
         n.outgoingStart, n.outgoingCount,
         n.x, n.y, n.z,

@@ -41,10 +41,40 @@ Provenance classes: `MEASURED / RECONSTRUCTED / INFERRED / PREDICTED / APPROXIMA
 
 ## Real data ingestion (next milestone)
 
-Status: **in progress.** BANC bulk graph downloads are research‑proxy gated; the
-pipeline (`python/flybrain/`, `python/tools/`) is ready to ingest once access is
-granted. FlyWire codex community graph: pilot script at `python/tools/fetch_flywire.py`
-(placeholder; see repo docs).
+Status: **ingest implemented and verified against the real release.** BANC bulk
+graph downloads are research-proxy gated; the pipeline (`python/flybrain/`,
+`tools/ingest_banc.py`) ingests the released files directly.
+
+### How a neuron is placed in a region - and what is NOT measured
+
+The release tags every neuron with the neuropils its synapses fall in, but:
+
+1. tags can be **compound** (`ME.LO`, `NO_CONS.ME`, `HTct_UTct_T3_L` - 30,514
+   neurons in banc-888), and the simulator has no compound region, so one
+   component must be chosen;
+2. the tag lists are **not ordered by synapse count** - measured across 18,801
+   sampled neurons, the first-listed tag equals the measured argmax only 60.2%
+   (input) / 46.5% (output) of the time, and only 17.9% of multi-tag lists are
+   themselves descending. The file stores per-*connection* neuropil, not
+   per-tag counts, so no component can be shown to be "the dominant" one.
+
+So the reduction of a (possibly compound) tag to a single `RegionID` is an
+explicit, documented **INFERRED choice** - first tag that maps, input list
+before output - and is recorded as INFERRED in `.fbpack` provenance and in
+`banc_cns.report.json`. The *tag* is reconstructed; the *region reduction* is
+not. Tags the taxonomy cannot express are counted as mapping gaps in the report
+(`atlas-tag-unmapped`, with the offending tag named) rather than silently
+re-homed or folded into "no region". Measurement tooling:
+`tools/measure_tag_order.py`, `tools/measure_banc_assumptions.py`.
+
+### Per-transmitter sign
+
+See `docs/BIOLOGY.md` for the per-transmitter table and citations. In short:
+ACh +1, GABA -1, **HIST -1** (chloride channel), **GLUT 0** (iGluR excitatory
+and GluClalpha inhibitory both exist), **DA/SER/OCT/TYR 0** (GPCR-only),
+unpredicted 0. A sign of 0 carries **no fast current** (the engine skips it);
+reading it as +1 is what previously asserted millions of unmeasured excitatory
+synapses.
 
 ## Cross‑dataset alignment (spec #91)
 

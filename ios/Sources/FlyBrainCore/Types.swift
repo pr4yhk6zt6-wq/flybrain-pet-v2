@@ -148,10 +148,22 @@ public enum TransmitterType: Int, Codable, Sendable, CaseIterable {
 
 /// Synaptic sign. IMPORTANT (spec #7): an anatomical connection is NOT a
 /// physiological weight. `sign`/`estimatedEfficacy` are INFERRED values.
+///
+/// `modulatory` (0) is not "excitatory with a small effect": it means the edge
+/// carries NO fast current and MotorSystem/NeuralEngine skip it entirely. It is
+/// used for the cases where the transmitter label cannot decide valence —
+/// glutamate (iGluR excitatory vs GluClα inhibitory in the fly CNS), the
+/// GPCR-only amines (DA/SER/OCT/TYR), and every neuron whose transmitter the
+/// release failed to predict. On banc-888 that is 59.4% of synaptic weight, so
+/// reading 0 as excitation (the old `sign < 0 ? -1 : 1`) asserted 2.2M
+/// excitatory synapses that were never measured.
 public enum SynapseSign: Int8, Codable, Sendable {
     case excitatory = 1
     case inhibitory = -1
-    case modulatory = 0
+    case unpolarised = 0
+
+    /// Legacy spelling kept so existing call sites/tests compile.
+    public static var modulatory: SynapseSign { .unpolarised }
 }
 
 /// Neuron-level state snapshot for inspection/telemetry (spec #17, #35).

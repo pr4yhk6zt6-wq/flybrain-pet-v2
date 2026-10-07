@@ -8,7 +8,7 @@ Run: python3 tools/check_tests.py
 """
 import copy
 import heapq
-from sim_neural_engine import Engine, chain, driveBurst
+from sim_neural_engine import Engine, chain, driveBurst, edge_current
 
 FAILS = []
 
@@ -120,6 +120,32 @@ owners = owners_of(3, [(0, 1), (0, 1), (2, 1)], [0, 1, 2])
 check("testValidateCatchesAliasedOutgoingRanges",
       owners[0] == 2 and "referenced by 2 neurons" in f"synapse 0 referenced by {owners[0]} neurons",
       f"owners={owners}")
+
+
+# --- testUnpolarisedSynapseCarriesNoCurrent -------------------------------
+# A sign of 0 must contribute exactly nothing. Before the fix the engine read
+# `sign < 0 ? -1 : 1`, so 0 became +1 and an unpolarised edge excited its
+# target: 9.3% of BANC's synaptic weight. Assert the mirror's polarity helper
+# and then show the behavioural difference end to end (a +1 edge must spike the
+# target where a 0 edge must not).
+assert edge_current(1.0, 1.0, 100, 0) is None, "sign 0 must emit no current"
+assert edge_current(1.0, 1.0, 100, 1) == 100.0
+assert edge_current(1.0, 1.0, 100, -1) == -100.0
+
+def target_spikes(sign):
+    cur = edge_current(0.9, 1.0, 1000, sign)
+    ee = Engine(2)
+    ee.tauM[1] = 15.0
+    if cur is not None:
+        ee.out[0] = [(1, cur)]
+    ee.inject(0, 500.0, 1.0)
+    ee.run(2000)
+    return ee.cum[1]
+
+exc = target_spikes(1)
+unpol = target_spikes(0)
+check("testUnpolarisedSynapseCarriesNoCurrent",
+      exc > 0 and unpol == 0, f"excitatory target spikes={exc} unpolarised={unpol}")
 
 print()
 print("FAILED:", FAILS if FAILS else "none")

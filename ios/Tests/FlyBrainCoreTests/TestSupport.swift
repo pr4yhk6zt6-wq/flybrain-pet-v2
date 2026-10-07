@@ -59,7 +59,7 @@ enum TestSupport {
             outgoing.append(OutEdgeRange(start: start, count: Int32(edges)))
         }
         let header = ConnectomeHeader(
-            magic: 0x46425031, version: 1, flags: 0,
+            magic: 0x46425031, version: 2, flags: 0,
             neuronCount: Int32(count), synapseCount: Int32(synapses.count),
             morphologyCount: 0, regionCount: 0,
             organism: OrganismInfo(datasetVersion: "test",
@@ -152,7 +152,7 @@ extension TestSupport {
         }
 
         let header = ConnectomeHeader(
-            magic: 0x46425031, version: 1, flags: 0,
+            magic: 0x46425031, version: 2, flags: 0,
             neuronCount: Int32(pid), synapseCount: Int32(synapses.count),
             morphologyCount: 0, regionCount: 0,
             organism: OrganismInfo(datasetVersion: "test",

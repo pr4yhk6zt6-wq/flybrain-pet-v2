@@ -1,0 +1,76 @@
+{
+  "dataset": "banc-888",
+  "source": "https://storage.googleapis.com/flywire-data/codex/data/banc/888",
+  "counts": {
+    "neurons_read": 158262,
+    "neurons_kept": 153746,
+    "neurons_dropped": 4516,
+    "connections_read": 3990039,
+    "connections_kept": 3036600,
+    "connections_dropped": 777,
+    "connections_below_threshold": 0
+  },
+  "regions_filled": {
+    "MEDULLA": 48518,
+    "LOBULA": 23806,
+    "SUPERIOR_BRAIN": 20533,
+    "LOBULA_PLATE": 17803,
+    "LEG_NEUROMERE": 9954,
+    "VENTRAL_NERVE_CORD": 6521,
+    "ABDOMINAL_NEUROMERE": 5757,
+    "ANTENNAL_LOBE": 5559,
+    "SUBESOPHAGEAL_ZONE": 4775,
+    "LATERAL_HORN": 3059,
+    "MUSHROOM_BODY": 2819,
+    "OPTIC_LOBE": 2354,
+    "CENTRAL_COMPLEX": 1313,
+    "HALTERE_NEUROPIL": 923,
+    "WING_NEUROPIL": 52
+  },
+  "unmapped_neuropils": {},
+  "transmitters": {
+    "ACH": 84797,
+    "GLUT": 24235,
+    "GABA": 20555,
+    "DA": 8016,
+    "HIST": 7665,
+    "(none)": 4791,
+    "OCT": 1885,
+    "SER": 1593,
+    "TYR": 209
+  },
+  "problems": [],
+  "provenance": {
+    "topology": "RECONSTRUCTED (EM tracing, BANC)",
+    "neuropil_assignment": "INFERRED (atlas tag -> single simulator region; compound tags resolved to the leading mapped component) \u2014 the release tag is RECONSTRUCTED, the region reduction is not",
+    "soma_position": "RECONSTRUCTED (voxel coordinates, 4/4/40 nm)",
+    "transmitter": "PREDICTED (classifier in the release)",
+    "sign": {
+      "status": "INFERRED (transmitter label -> valence, per transmitter)",
+      "ACH": "+1 (cation-permeant nicotinic AChR)",
+      "GABA": "-1 (Rdl GABA-gated Cl- channel)",
+      "HIST": "-1 (histamine-gated Cl- channels, lamina L1-L3)",
+      "GLUT": "0 (iGluR excitatory AND GluClalpha inhibitory both exist; valence is cell-type-specific)",
+      "DA/SER/OCT/TYR": "0 (GPCR-only families; no modelled fast current)",
+      "unpredicted": "0 (no evidence to excite OR inhibit)"
+    },
+    "efficacy": "INFERRED (synapse-count saturation curve)",
+    "delay": "APPROXIMATED (constant, not in the release)"
+  },
+  "extra": {
+    "asset": "data/generated/banc_cns.fbpack",
+    "asset_bytes": 68728020,
+    "min_synapses": 1,
+    "elapsed_seconds": 1819.83,
+    "type_vocabulary_size": 11566,
+    "dropped_reasons": {
+      "fragment-no-region": 375,
+      "no-atlas-tag": 3668,
+      "glia": 458,
+      "not-a-neuron (trachea)": 8,
+      "not-a-neuron (not_a_neuron)": 7
+    },
+    "neurons_without_position": 0,
+    "connections_before_pair_merge": 3989263
+  }
+}

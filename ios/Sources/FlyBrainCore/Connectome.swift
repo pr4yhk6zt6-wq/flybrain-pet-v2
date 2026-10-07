@@ -15,7 +15,10 @@ import Foundation
 public struct NeuronRecord {
     public var canonicalID: Int32      // stable ID across datasets (index = position in array)
     public var datasetID: UInt8        // DatasetID raw
-    public var type: UInt8             // CellType raw
+    public var type: UInt16            // CellType raw (u16: the real BANC
+                                       // release has 11,566 distinct cell
+                                       // types, so a u8 vocabulary would
+                                       // silently alias them into 256 bins)
     public var region: UInt8           // RegionID raw
     public var side: UInt8             // 0=center,1=left,2=right
     public var transmitter: UInt8      // TransmitterType raw
@@ -29,7 +32,7 @@ public struct NeuronRecord {
     public var y: Float
     public var z: Float
 
-    public init(canonicalID: Int32, datasetID: UInt8, type: UInt8, region: UInt8,
+    public init(canonicalID: Int32, datasetID: UInt8, type: UInt16, region: UInt8,
                 side: UInt8, transmitter: UInt8, provenance: UInt8,
                 morphologyIndex: Int32, incomingStart: Int32, incomingCount: Int32,
                 outgoingStart: Int32, outgoingCount: Int32,
@@ -105,7 +108,7 @@ public struct ConnectomeHeader: Codable {
     public var generatedBy: String
     public var description: String
 
-    public init(magic: UInt32, version: UInt32 = 1, flags: UInt32 = 0,
+    public init(magic: UInt32, version: UInt32 = 2, flags: UInt32 = 0,
                 neuronCount: Int32, synapseCount: Int32, morphologyCount: Int32,
                 regionCount: Int32, organism: OrganismInfo,
                 sourceDatasets: [String], dataProvenance: String,
@@ -224,24 +227,49 @@ public final class Connectome: @unchecked Sendable {
         return problems
     }
 
-    /// Validate the incoming ranges form a consistent CSR layout.
-    /// NOTE: for graphs whose incoming CSR is not yet built (synthetic demo),
-    /// every neuron may carry incomingStart=0, incomingCount=0 — that passes.
+    /// Validate the incoming ranges.
+    /// The .fbpack format stores NO incoming index block — only outgoing edges
+    /// (neuron/synapse/range/region). Assets therefore declare incomingCount=0
+    /// for every neuron ("no incoming CSR is stored"), and this passes.
+    ///
+    /// If an asset DID declare non-zero incoming counts, `incomingStart` would
+    /// have to be the prefix sum of those counts in neuron order, because that
+    /// is what a CSR reader derives its offset from; the previous single-run
+    /// counter accepted a layout with no gaps OR overlaps only by accident and
+    /// would reject a legitimate CSR whose zero-count neurons sit mid-table.
+    /// It also had to be told separately that a synthetic demo with all-zero
+    /// counts "passes", which is the same statement as above.
     public func validateCSR() -> [String] {
         var problems: [String] = []
-        var total = 0
+        var expected = 0
         for nrn in neurons {
-            if nrn.incomingCount > 0 {
-                if nrn.incomingStart != total { problems.append("incoming CSR gap at \(nrn.canonicalID)") }
-                total += Int(nrn.incomingCount)
+            if nrn.incomingCount > 0 && nrn.incomingStart != expected {
+                problems.append("incoming CSR gap at \(nrn.canonicalID): "
+                                + "start \(nrn.incomingStart) != \(expected)")
             }
+            expected += Int(max(nrn.incomingCount, 0))
         }
-        if total > synapses.count { problems.append("incoming CSR total exceeds synapses") }
+        if expected > synapses.count {
+            problems.append("incoming CSR total \(expected) exceeds \(synapses.count) synapses")
+        }
         return problems
     }
 
     /// Recompute region bounds (used by renderer culling & LOD).
     public func buildRegionBounds() {
+        regionBounds = deriveRegionBounds()
+    }
+
+    /// Set region bounds directly (used by the asset loader, which reads them
+    /// from the file rather than recomputing them from soma positions).
+    public func setRegionBounds(_ bounds: [RegionBounds]) {
+        regionBounds = bounds
+    }
+
+    /// Derive region bounds from the neurons currently held (pure; does not
+    /// mutate). `buildRegionBounds` publishes the result; the packer uses it to
+    /// fill `header.regionCount` without touching the stored property.
+    private func deriveRegionBounds() -> [RegionBounds] {
         var minV: [UInt8: (Float, Float, Float)] = [:]
         var maxV: [UInt8: (Float, Float, Float)] = [:]
         for nrn in neurons {
@@ -251,7 +279,7 @@ public final class Connectome: @unchecked Sendable {
             let m = maxV[r, default: (-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)]
             maxV[r] = (max(m.0, nrn.x), max(m.1, nrn.y), max(m.2, nrn.z))
         }
-        regionBounds = minV.keys.map { r in
+        return minV.keys.map { r in
             RegionBounds(region: r, minX: minV[r]!.0, minY: minV[r]!.1, minZ: minV[r]!.2,
                          maxX: maxV[r]!.0, maxY: maxV[r]!.1, maxZ: maxV[r]!.2)
         }.sorted { $0.region < $1.region }
@@ -296,15 +324,16 @@ public final class Connectome: @unchecked Sendable {
     //   [u64 neuronBytes][NeuronRecord × neuronCount]      stride 44
     //   [u64 synapseBytes][SynapseRecord × synapseCount]   stride 20
     //   [u64 rangeBytes][OutEdgeRange × neuronCount]       stride 8
-    //   [u64 regionBytes][RegionBounds × regionCount]      stride 32
+    //   [u64 regionBytes][RegionBounds × regionCount]      stride 28
     //
-    // NeuronRecord (44): i32 canonicalID; u8 datasetID,type,region,side,
-    //   transmitter,provenance; pad2; i32 morphologyIndex, incomingStart,
-    //   incomingCount, outgoingStart, outgoingCount; f32 x,y,z
+    // NeuronRecord (44, v2): i32 canonicalID; u8 datasetID,region,side,
+    //   transmitter,provenance; u8 flags; u16 type; i32 morphologyIndex,
+    //   incomingStart, incomingCount, outgoingStart, outgoingCount; f32 x,y,z
+    //   offsets: 0, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 28, 32, 36, 40
     // SynapseRecord (20): i32 preNeuron, postNeuron; u16 synapseCount;
     //   u8 transmitter; i8 sign; u8 confidence, delaySteps; pad2; f32 efficacy
     // OutEdgeRange (8): i32 start, count
-    // RegionBounds (32): u8 region; pad3; f32 minX,minY,minZ,maxX,maxY,maxZ
+    // RegionBounds (28): u8 region; pad3; f32 minX,minY,minZ,maxX,maxY,maxZ
 
     private func appendU64(_ v: UInt64, to d: inout Data) { d.append(contentsOf: withUnsafeBytes(of: v.littleEndian) { Data($0) }) }
     private func appendI32(_ v: Int32, to d: inout Data) { d.append(contentsOf: withUnsafeBytes(of: v.littleEndian) { Data($0) }) }
@@ -313,11 +342,14 @@ public final class Connectome: @unchecked Sendable {
     private func appendF32(_ v: Float, to d: inout Data) { d.append(contentsOf: withUnsafeBytes(of: v.bitPattern.littleEndian) { Data($0) }) }
 
     private func appendNeuronRecord(_ n: NeuronRecord, to d: inout Data) {
+        // v2 layout: i32 id; u8 datasetID,region,side,transmitter,provenance;
+        // u8 flags; u16 type; i32 morphology/in-out starts+counts; 3×f32.
         appendI32(n.canonicalID, to: &d)
-        appendU8(n.datasetID, to: &d); appendU8(n.type, to: &d)
+        appendU8(n.datasetID, to: &d)
         appendU8(n.region, to: &d); appendU8(n.side, to: &d)
         appendU8(n.transmitter, to: &d); appendU8(n.provenance, to: &d)
-        d.append(contentsOf: [0, 0])                      // pad 2
+        appendU8(0, to: &d)                               // flags (reserved)
+        appendU16(n.type, to: &d)
         appendI32(n.morphologyIndex, to: &d)
         appendI32(n.incomingStart, to: &d); appendI32(n.incomingCount, to: &d)
         appendI32(n.outgoingStart, to: &d); appendI32(n.outgoingCount, to: &d)
@@ -371,7 +403,7 @@ public final class Connectome: @unchecked Sendable {
         outgoingRanges.forEach { appendRangeRecord($0, to: &od) }
         appendU64(UInt64(od.count), to: &data); data.append(od)
 
-        var rd = Data(capacity: regionBounds.count * 32)
+        var rd = Data(capacity: regionBounds.count * 28)
         regionBounds.forEach { appendRegionRecord($0, to: &rd) }
         appendU64(UInt64(rd.count), to: &data); data.append(rd)
 
@@ -408,7 +440,10 @@ public final class Connectome: @unchecked Sendable {
         while hdrClean.last == 0 { hdrClean.removeLast() }
         let header = try JSONDecoder().decode(ConnectomeHeader.self, from: hdrClean)
         guard header.magic == 0x46425031 else { throw ConnectomeError.badMagic }
-        guard header.version == 1 else { throw ConnectomeError.unsupportedVersion(header.version) }
+        // v2 widened NeuronRecord.type from u8 to u16. A v1 asset would be
+        // parsed with every neuron taking its region byte as the cell type, so
+        // it is rejected instead of silently misread.
+        guard header.version == 2 else { throw ConnectomeError.unsupportedVersion(header.version) }
 
         // Neurons
         let neuronData = try readBlockBytes()
@@ -421,8 +456,15 @@ public final class Connectome: @unchecked Sendable {
             func f32(_ o: Int) -> Float { Float(bitPattern: UInt32(littleEndian: neuronData.subdata(in: (off+o)..<(off+o+4)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })) }
             func u8(_ o: Int) -> UInt8 { neuronData[off + o] }
             let n = NeuronRecord(
-                canonicalID: i32(0), datasetID: u8(4), type: u8(5), region: u8(6),
-                side: u8(7), transmitter: u8(8), provenance: u8(9),
+                canonicalID: i32(0), datasetID: u8(4), type: u16(10), region: u8(5),
+                // v2 field order after `region` is side, transmitter, provenance,
+                // then a reserved flags byte, then the u16 type. The reader used
+                // to take type from offset 6 and wind side/transmitter/provenance
+                // back by one, so on EVERY asset it returned a bogus type
+                // (e.g. 770 instead of 4660) plus the wrong side, transmitter and
+                // provenance — both writers (flybrain/pack.py, packNeuronRecord)
+                // put them at 6/7/8 with type at 10.
+                side: u8(6), transmitter: u8(7), provenance: u8(8),
                 morphologyIndex: i32(12), incomingStart: i32(16), incomingCount: i32(20),
                 outgoingStart: i32(24), outgoingCount: i32(28),
                 x: f32(32), y: f32(36), z: f32(40))
@@ -465,13 +507,18 @@ public final class Connectome: @unchecked Sendable {
         // Region bounds
         let regionData = try readBlockBytes()
         var regions: [RegionBounds] = []
-        if regionData.count % 32 != 0 { throw ConnectomeError.corrupt("region block alignment") }
+        // 28 bytes per record (u8 + 3 pad + 6 f32), matching flybrain/pack.py.
+        if regionData.count % 28 != 0 { throw ConnectomeError.corrupt("region block alignment") }
         off = 0
-        while off + 32 <= regionData.count {
+        while off + 28 <= regionData.count {
             func f32(_ o: Int) -> Float { Float(bitPattern: UInt32(littleEndian: regionData.subdata(in: (off+o)..<(off+o+4)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })) }
             regions.append(RegionBounds(region: regionData[off], minX: f32(4), minY: f32(8), minZ: f32(12),
                                         maxX: f32(16), maxY: f32(20), maxZ: f32(24)))
-            off += 32
+            // 28 bytes per record, NOT 32. Advancing 32 walked off the end of
+            // the block and (when the block was long enough) fed the parser the
+            // next record's region byte as this one's padding, so region
+            // bounds came back scrambled or the block was rejected outright.
+            off += 28
         }
 
         guard neurons.count == header.neuronCount else {

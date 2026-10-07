@@ -11,11 +11,26 @@ are real, never tuned for demo looks.
 ### Python pipeline (`python/tests/`)
 
 - synthetic build is consistent & passes integrity validation
-- `.fbpack` layout: neuron block 44 B, synapse block 20 B (byte-exact)
+- `.fbpack` layout: neuron block 44 B (field offsets pinned), synapse block
+  20 B, **region block 28 B** (byte-exact)
 - all synthetic neurons provenance=INFERRED (never MEASURED)
-- synapse sign/transmitter validity
+- synapse sign/transmitter validity, per-transmitter (ACh +1, GABA −1,
+  HIST −1, GLUT 0, amines 0, unpredicted 0)
 - key regions present (lamina, medulla, MB, VNC, leg, SEZ, wing)
 - pack round-trip preserves counts
+- **the complete banc-888 neuropil vocabulary (111 tags) maps to a region** —
+  the guard that catches a dropped/renamed release tag without the raw data
+- compound tags resolve through their components; a tag is split on "." only
+- BANC ingest: neuron keep/drop accounting by reason, CSR tiling, u16 cell-type
+  round-trip with a >255 vocabulary, positions in the release's own format
+
+### Real-data validation (`tools/verify_banc.py`, `tools/measure_*.py`)
+
+The BANC ingest is verified against measurements taken on the real banc-888
+release, not against hand-written constants: connection ordering and
+duplication, Root-ID ordering, coordinate-frame orientation, voxel scale
+(4/4/40 nm), transmitter census, tag-list ordering, and the full drop
+breakdown with the number of connections each drop actually removes.
 
 ### Swift core (XCTest, `ios/Tests/FlyBrainCoreTests/`) — requires Xcode
 
@@ -26,7 +41,12 @@ are real, never tuned for demo looks.
 - snapshot/restore round-trip ⇒ identical continuation
 - connectome validation catches orphan edges
 - CSR layout valid
+- a **sign-0 (unpolarised) synapse carries no current** — both graphs identical
+  except the sign, so only polarity can explain the difference
 - telemetry reflects real firing
+- `.fbpack` format round-trips: a neuron keeps every field (id, region, side,
+  transmitter, provenance, u16 type, morphology, in/out ranges, xyz), region
+  bounds survive the 28-byte stride, and validateCSR() accepts a real asset
 
 Run: `cd ios && xcodebuild -scheme FlyBrainCore -destination 'platform=iOS Simulator,name=iPhone 15' test`
 (or `swift test` once a SwiftPM manifest is added).

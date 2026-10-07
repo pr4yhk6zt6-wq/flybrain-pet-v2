@@ -25,6 +25,22 @@ class Provenance(enum.IntEnum):
     UNKNOWN = 5
 
 
+def _provenance_name(value) -> str:
+    """Canonical NAME of a provenance value, for the JSON header.
+
+    The header is decoded by Swift as `ConnectomeHeader.dataProvenance: String`
+    (the Swift `Provenance` enum is `String`-backed), so the wire form must be
+    the member NAME ("RECONSTRUCTED"), never the integer raw value. Accepts an
+    enum member, its integer, or an already-correct name so any caller can pass
+    what it has.
+    """
+    if isinstance(value, Provenance):
+        return value.name
+    if isinstance(value, str):
+        return value.upper()
+    return Provenance(int(value)).name
+
+
 # Datasets this pipeline knows how to consume (spec #4, #118)
 class DatasetID(enum.IntEnum):
     SYNTHETIC = 0
@@ -172,7 +188,12 @@ class ConnectomeHeader:
             "regionCount": self.regionCount,
             "organism": self.organism,
             "sourceDatasets": self.sourceDatasets,
-            "dataProvenance": self.dataProvenance,
+            # Swift decodes this field as `String` (ConnectomeHeader.dataProvenance:
+            # String, mirroring the `Provenance: String` enum). Writing the
+            # IntEnum here serialised an INTEGER (1/2/...), which made
+            # JSONDecoder throw and no Python-generated .fbpack could be opened
+            # by the app at all. Emit the enum's NAME so both languages agree.
+            "dataProvenance": _provenance_name(self.dataProvenance),
             "generationDate": self.generationDate,
             "generatedBy": self.generatedBy,
             "description": self.description,
@@ -322,7 +343,7 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
 
     header = ConnectomeHeader(
         magic=0x46425031,
-        version=1,
+        version=2,          # v2 widened the cell-type field from u8 to u16
         flags=0,
         neuronCount=neuron_id,
         synapseCount=len(synapse_list),

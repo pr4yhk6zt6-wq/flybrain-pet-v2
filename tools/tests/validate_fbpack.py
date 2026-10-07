@@ -16,7 +16,7 @@ STRIDE = {
     "neuron": 44,
     "synapse": 20,
     "range": 8,
-    "region": 32,
+    "region": 28,
 }
 
 
@@ -40,7 +40,10 @@ def main() -> int:
     problems = []
     if hdr.get("magic") != 0x46425031:
         problems.append("bad magic")
-    if hdr.get("version") != 1:
+    # v2 widened NeuronRecord.type from u8 to u16 (the real BANC release has
+    # 11,566 cell types). A v1 asset has a different byte layout, so accepting
+    # both would mean silently misreading one of them.
+    if hdr.get("version") != 2:
         problems.append(f"unsupported version {hdr.get('version')}")
     n_neurons = len(blocks["neuron"]) // STRIDE["neuron"]
     n_syn = len(blocks["synapse"]) // STRIDE["synapse"]

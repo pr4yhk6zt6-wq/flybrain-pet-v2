@@ -21,3 +21,14 @@ node_modules/
 *.pem
 *.key
 .env
+
+# Real connectome releases (hundreds of MB; fetched, never committed).
+# Only the small synthetic demo asset and the generated report are tracked.
+data/raw/
+*.part
+
+# The real ingested BANC asset is ~69 MB (the release itself is 522 MB). CI
+# re-derives the small release-order checks from the raw download instead
+# (tools/verify_banc.py), so the binary is a local build artifact, not a
+# tracked file. Its report JSON stays tracked — it is a few KB of evidence.
+data/generated/banc_cns.fbpack

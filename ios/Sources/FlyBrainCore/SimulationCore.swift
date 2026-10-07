@@ -52,10 +52,14 @@ public final class SimulationCore: @unchecked Sendable {
     /// Passive behavior classifier (spec #43/#44) — observes, never controls.
     public let behavior: BehaviorClassifier
 
-    /// Motor pattern generation (Phase 4 starter, spec #17/#20).
+    /// Motor pattern generation (Phase 4/6, spec #17/#20).
     public let motor: MotorSystem
     /// Articulated body (Phase 5 starter, spec #18).
     public private(set) var body = FlyBody()
+    /// Rigid-body dynamics of the whole animal (Phase 6/7, spec #18, #22).
+    /// Owns pose, velocity and the physical response to motor output; the
+    /// SensoryInterface samples the world from its pose.
+    public private(set) var dynamics = BodyDynamics()
 
     /// Motor-neuron drive readout from VNC (per leg group + wing + proboscis).
     private var neuralDrive: [Float] = []
@@ -86,6 +90,10 @@ public final class SimulationCore: @unchecked Sendable {
             step()
         }
     }
+
+    /// A high step-time gate lives in the neural engine, but the body owns its
+    /// own clock (spec #22 multirate): the reflex check runs every NN step.
+    private static let bodyStepsPerNeuralStep = 1
 
     public func step() {
         let dt = parameters.dt
@@ -125,10 +133,10 @@ public final class SimulationCore: @unchecked Sendable {
         readMotorDrive()
         motor.update(neuralDrive: neuralDrive, dt: dt)
 
-        // 5) Body integration + world interaction (spec #30): apply motor
-        //    output to the articulated body; move the fly; collide with
-        //    obstacles; sample world back into senses (close the loop).
-        integrateBody(dt: dt)
+        // 5) Body integration + world interaction (spec #30): apply the motor
+        //    command to the rigid body, integrate contact forces, move the
+        //    fly, collide with the scene, then let the new pose drive the
+        //    next sensory sample (this is what closes the loop).
         integrateLocomotion(dt: dt)
 
         // 6) Internal physiology
@@ -165,58 +173,131 @@ public final class SimulationCore: @unchecked Sendable {
         motor.proboscisDrive = Float(sez) / 4
     }
 
-    /// Phase-5 placeholder: apply motor output to the articulated body.
-    private func integrateBody(dt: Double) {
-        // Legs from motor output (joint torques → joint angles handled by CPG)
+    /// Embody locomotion. The fly is a rigid body with mass and inertia; the
+    /// motor command produces leg traction and wing forces, which are the ONLY
+    /// sources of momentum. Integration and collision resolution happen in
+    /// `dynamics` (spec #18, #30), and the resulting pose feeds the next
+    /// sensory sample — walking speed is therefore an outcome of the loop, not
+    /// a constant chosen here.
+    private func integrateLocomotion(dt: Double) {
+        // The muscles' command comes from the connectome readout (spikes).
+        var command = BodyMotorCommand()
+        command.legContactFraction = motor.output.legContactFraction
+        command.legsInContact = motor.output.legsInContact
+        command.forwardSpeedTarget = motor.output.forwardSpeedTarget
+        command.lateralSpeedTarget = motor.output.lateralSpeedTarget
+        command.wingStrokeFrequency = motor.output.wingStrokeFreq
+        command.wingStrokeAmplitude = motor.output.wingStrokeAmplitude
+        command.wingAsymmetry = motor.output.leftRightAsymmetry
+        command.haltereDrive = motor.output.haltereDrive
+        command.pitchBias = motor.output.pitchBias
+
+        // Ground contact is handled INSIDE the solver from the leg-contact state
+        // in the command, and the substrate force itself comes from the contact
+        // solver in `BodyDynamics.step` — there is no mode flag here, and no
+        // place in this function where the fly is "put" into the air.
+
+        // Body clock (spec #22): the rigid body integrates at its own rate,
+        // never tied to render FPS and decoupled from the neural dt. The body
+        // solver works in seconds (mm/mg/s) while `parameters.dt` is in
+        // milliseconds, so the two clocks are converted explicitly here.
+        dynamics.step(command: command, dt: Float(dt / 1000))
+
+        // Publish the new pose for rendering, sensing and telemetry.
+        position = dynamics.position
+        forward = dynamics.forward
+        up = dynamics.up
+
+        resolveSceneCollision()
+
+        applyArticulation()
+
+        // Proprioceptive / mechanosensory reafference (spec #15): leg load,
+        // wing strain and airflow now reach the VNC from the real contact
+        // state, closing the body→sensor arc.
+        emitMechanosensoryReafference(dt: dt)
+    }
+
+    /// Push the physics pose into the articulated body for rendering, and read
+    /// the joint angles back from the motor cycle.
+    private func applyArticulation() {
         for i in 0..<min(motor.legs.count, body.legs.count) {
             body.legs[i].coxa.angle = motor.legs[i].coxa.angle
             body.legs[i].femur.angle = motor.legs[i].femur.angle
             body.legs[i].tibia.angle = motor.legs[i].tibia.angle
+            body.legs[i].isSwing = motor.legs[i].isSwing
         }
-        // Wings from output (spec #19)
-        let freq = motor.output.wingStrokeFreq          // Hz (up to ~180)
-        let tMs = engine.currentTimeMs
-        let phaseRad = Float(tMs / 1000.0) * 2 * .pi * max(freq, 1)   // full cycles
+        let freq = motor.output.wingStrokeFreq
+        let phaseRad = Float(dynamics.simulationTimeMs / 1000.0) * 2 * .pi * max(freq, 1)
         for i in 0..<body.wings.count {
             let amp = motor.output.wingStrokeAmplitude
             body.wings[i].strokeAngle.angle = amp * sin(phaseRad)
             body.wings[i].rotationAngle.angle = amp * 0.3 * cos(phaseRad)
         }
-        // Halteres follow wing beat (inertial feedback, spec #16)
         let hb = motor.output.haltereBeat
         for i in 0..<body.halteres.count {
             body.halteres[i].beatFrequency = hb * 180
         }
-        // Proboscis
         body.proboscis.angle = motor.proboscisDrive * 0.8
-        // Antennae follow head orientation placeholder
         body.leftAntenna.angle = 0.2 + motor.output.antennaAngle
         body.rightAntenna.angle = -0.2 + motor.output.antennaAngle
     }
 
-    /// Phase-5 locomotion: moves the fly from motor output (six-legged gait)
-    /// through the world with collision. Velocity scales with leg torque.
-    private func integrateLocomotion(dt: Double) {
-        // walking speed from motor output (leg torques sum)
-        let legDrive = motor.output.legTorques.reduce(0, +) / 6
-        let walkSpeed: Float = 8.0   // mm/s max (fly ~ several body lengths/s)
-        // heading: straight forward with small turn from L/R asymmetry
-        let turn = motor.output.leftRightAsymmetry * 0.5
-        let heading = atan2(forward.y, forward.x) + turn * Float(dt)
-        let dir = SIMD3(cos(heading), sin(heading), 0)
-        forward = dir
-        var pos = position + dir * (walkSpeed * legDrive * Float(dt))
-        // gravityless walking plane; world collision resolves obstacles
-        scene?.resolveCollision(position: &pos)
-        position = pos
+    /// The world acts on the BODY, not on a teleported point (spec #30): when
+    /// the solver has pushed the fly into a solid obstacle, the scene resolves
+    /// it, and the corrected position — plus the momentum actually absorbed —
+    /// goes back into the rigid body so the next step starts from the real
+    /// state. Without this the fly would walk through walls while the renderer
+    /// and the sensory sampler disagreed about where it was.
+    private func resolveSceneCollision() {
+        guard let scene else { return }
+        var p = dynamics.position
+        // A fly body is about 2.5 mm long; use it as the contact radius so the
+        // animal cannot intersect an obstacle by more than its own size.
+        let radius = min(max(dynamics.parameters.bodyLengthMm * 0.5, 0.1), 1.0)
+        let before = p
+        scene.resolveCollision(position: &p, radius: radius)
+        guard p != before else { return }
+        dynamics.setPosition(p)
+        // Momentum was absorbed by the obstacle: drop the component of the
+        // velocity that pointed into the surface rather than letting the body
+        // keep its speed while standing still (which would be free energy).
+        let push = p - before
+        let n = FlyMath.normalize(push)
+        let into = FlyMath.dot(dynamics.body.velocity, n)
+        if into < 0 {
+            dynamics.setVelocity(dynamics.body.velocity - n * into)
+        }
+    }
 
-        // proprioception feedback (spec #15): leg contact → mechano input
-        if let w = world {
-            // ground contact squeeze — feed a weak mechano tone into VNC
-            let legContact = legDrive > 0.05 ? 0.3 : 0.0
-            let touchInputs = sensory.touchInput(side: 1, intensity: Float(legContact))
-            for t in touchInputs {
-                engine.injectCurrent(into: t.neuron, current: t.current, at: engine.currentTimeMs)
+    /// Mechanosensory reafference from the real physical state (spec #15):
+    /// tarsal load, haltere-derived body rotation, and wing strain feed
+    /// ascending pathways. These are measurements of the body, not commands.
+    private func emitMechanosensoryReafference(dt: Double) {
+        let load = dynamics.groundLoadFraction        // 0..1 from contact solver
+        if load > 0.01 {
+            for t in sensory.touchInput(side: 1, intensity: Float(load) * 0.6) {
+                engine.injectCurrent(into: t.neuron, current: t.current,
+                                     at: engine.currentTimeMs)
+            }
+        }
+        // Haltere input is proportional to actual angular velocity and to the
+        // Coriolis force the vibrating halteres experience while rotating —
+        // this is the feedback that stabilises flight (spec #16).
+        let rate = dynamics.angularRateMagnitude        // deg/s
+        if rate > 1 {
+            let intensity = min(rate / 500, 1) * 0.5
+            for m in sensory.haltereInput(intensity: intensity) {
+                engine.injectCurrent(into: m.neuron, current: m.current,
+                                     at: engine.currentTimeMs)
+            }
+        }
+        // Wing strain (campaniform sensilla) whenever the wings are beating.
+        if motor.output.wingStrokeFreq > 1 {
+            let strain = min(motor.output.wingStrokeFreq / 180, 1) * 0.3
+            for m in sensory.wingStrainInput(intensity: strain) {
+                engine.injectCurrent(into: m.neuron, current: m.current,
+                                     at: engine.currentTimeMs)
             }
         }
     }
@@ -237,10 +318,20 @@ public final class SimulationCore: @unchecked Sendable {
 
     // MARK: - Embodiment
 
+    /// Place the fly in the world (spawn, teleport). This must move the RIGID
+    /// BODY, not just the published pose: `integrateLocomotion` overwrites the
+    /// published pose from `dynamics` on the very next step, so setting only
+    /// the core's copy would silently snap the fly back to the solver state.
     public func setPose(position: SIMD3<Float>, forward: SIMD3<Float>, up: SIMD3<Float>) {
         self.position = position
-        self.forward = FlyMath.normalize(forward)
-        self.up = FlyMath.normalize(up)
+        let f = FlyMath.normalize(forward)
+        let u = FlyMath.normalize(up)
+        self.forward = f
+        self.up = u
+        dynamics.teleport(position: position, forward: f, up: u)
+        // Velocity belonged to the old place; carrying it across a teleport
+        // would make the next step meaningless.
+        dynamics.setVelocity(SIMD3(0, 0, 0))
     }
 }
 

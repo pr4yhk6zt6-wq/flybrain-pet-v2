@@ -22,6 +22,12 @@ jobs:
         run: |
           python tools/gen_synth.py data/generated/demo_micro.fbpack
           python tools/tests/validate_fbpack.py data/generated/demo_micro.fbpack
+      - name: Neural engine offline mirror (parity with Swift)
+        run: python tools/check_tests.py
+      - name: Body physics offline gates (calibration + regression)
+        run: |
+          python tools/sim_body_dynamics.py
+          python tools/verify_body_physics.py
       - name: Ingest fixture (FlyWire pilot)
         run: |
           python tools/fetch_flywire.py

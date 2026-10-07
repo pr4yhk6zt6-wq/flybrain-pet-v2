@@ -37,4 +37,11 @@ public enum FlyMath {
               a.z * b.x - a.x * b.z,
               a.x * b.y - a.y * b.x)
     }
+
+    /// Dot product (portable — Apple's `simd` module is not available on
+    /// every platform this core is built for, e.g. Linux SwiftPM CI).
+    @inlinable
+    public static func dot(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+        a.x * b.x + a.y * b.y + a.z * b.z
+    }
 }

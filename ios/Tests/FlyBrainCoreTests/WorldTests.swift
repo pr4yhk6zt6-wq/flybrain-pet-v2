@@ -50,11 +50,14 @@ final class WorldTests: XCTestCase {
     }
 
     func testDiagnoseLoopTransient() {
-        // TEMPORARY diagnostic: is the measured displacement locomotion, or the
-        // body settling under gravity from its spawn pose? Splitting the run
-        // into a settle phase and a measurement phase answers that directly.
-        func run(connectome: Connectome, odorEmission: Float,
-                 settle: Int, steps: Int) -> (settled: Float, locomotion: Float) {
+        // TEMPORARY diagnostic. Two competing explanations for why a silent
+        // scene and a driven one move the body by an identical distance:
+        //   (1) the body's motion is not driven by the motor command at all,
+        //   (2) the gait's stance/swing timing is advanced per STEP rather than
+        //       per unit time, so a step covers the same ground regardless.
+        // Printing the motor command itself separates them.
+        func probe(connectome: Connectome, odorEmission: Float,
+                   settle: Int, steps: Int) {
             let core = SimulationCore(connectome: connectome)
             let w = World()
             w.backgroundLuminance = 0
@@ -65,25 +68,25 @@ final class WorldTests: XCTestCase {
                                            diffusionConstant: 100))
             }
             core.setScene(w)
-            let start = core.position
             core.run(steps: settle)
-            let settledPos = core.position
-            let settledDist = FlyMath.length(SIMD3<Float>((settledPos - start).x, 0, (settledPos - start).z))
+            let settlePos = core.position
             core.run(steps: steps)
-            let d = core.position - settledPos
-            let moved = FlyMath.length(SIMD3<Float>(d.x, 0, d.z))
+            let cmd = core.motor.output
+            let d = core.position - settlePos
             print("DIAG odour=\(odorEmission) settle=\(settle) steps=\(steps) "
                   + "spikes=\(core.engine.spikeCount) "
-                  + "settledDist=\(settledDist) locomotion=\(moved)")
-            return (settledDist, moved)
+                  + "fwd=\(cmd.forwardSpeedTarget) lat=\(cmd.lateralSpeedTarget) "
+                  + "walkDrive=\(cmd.walkDrive) legsInContact=\(cmd.legsInContact) "
+                  + "contactFrac=\(cmd.legContactFraction) "
+                  + "locomotion=\(FlyMath.length(SIMD3<Float>(d.x, 0, d.z)))")
         }
         let closed = TestSupport.closedLoopConnectome()
         let regional = TestSupport.regionalConnectome(neuronsPerRegion: 10)
-        for settle in [0, 500, 1000] {
-            _ = run(connectome: closed, odorEmission: 0, settle: settle, steps: 4000)
-            _ = run(connectome: closed, odorEmission: 4, settle: settle, steps: 4000)
-            _ = run(connectome: regional, odorEmission: 4, settle: settle, steps: 4000)
-        }
+        probe(connectome: closed, odorEmission: 0, settle: 500, steps: 1000)
+        probe(connectome: closed, odorEmission: 0, settle: 500, steps: 4000)
+        probe(connectome: closed, odorEmission: 4, settle: 500, steps: 1000)
+        probe(connectome: closed, odorEmission: 4, settle: 500, steps: 4000)
+        probe(connectome: regional, odorEmission: 4, settle: 500, steps: 4000)
     }
 
     func testSceneIntegratesIntoClosedLoop() {

@@ -38,8 +38,10 @@ final class AppModel: ObservableObject {
             params.seed = 0x5EED
             let core = SimulationCore(connectome: connectome, parameters: params)
             core.setScene(world)
+            // Y-up world (World.swift clamps y >= 0): spawn just above the
+            // substrate with the dorsal axis pointing up.
             core.setPose(position: SIMD3(0, 0.2, 0),
-                         forward: SIMD3(1, 0, 0), up: SIMD3(0, 0, 1))
+                         forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
             self.core = core
             isLoaded = true
             startTicker()

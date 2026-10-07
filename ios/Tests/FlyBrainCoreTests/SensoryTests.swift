@@ -91,11 +91,69 @@ final class SensoryTests: XCTestCase {
     }
 
     func testMotorCPGProducesLegTorques() {
+        // A single 100 ms tick: a leg that lifts must push, but the fly may
+        // never take all six feet off the ground at once. (This test used to
+        // only check "some torque is positive", which the buggy code passed by
+        // lifting every leg simultaneously — see testGaitAlwaysKeepsSupport.)
         let motor = MotorSystem()
         motor.update(neuralDrive: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8], dt: 100)
         XCTAssertEqual(motor.legs.count, 6)
         XCTAssertEqual(motor.output.legTorques.count, 6)
+        let planted = motor.legs.filter { !$0.isSwing }.count
+        XCTAssertGreaterThanOrEqual(planted, MotorSystem.minSupportLegs,
+                                    "100 ms tick left the fly with fewer than \(MotorSystem.minSupportLegs) planted legs")
         XCTAssertGreaterThan(motor.output.legTorques.reduce(0, +), 0)
+    }
+
+    /// Spec §27 / docs/PHYSICS.md: the walking gait must ALWAYS keep a stable
+    /// set of feet on the ground. The previous code OR-ed a mechanical drift
+    /// timeout with the support requirement, so after `maxStanceMs` of
+    /// simulated time every leg timed out on the same tick and all six lifted.
+    func testGaitAlwaysKeepsSupport() {
+        let motor = MotorSystem()
+        var plantedCounts: [Int] = []
+        var swingSets: Set<Set<Int>> = []
+        for _ in 0..<4000 {
+            motor.update(neuralDrive: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8], dt: 0.1)
+            let swing = Set(motor.legs.enumerated().filter { $0.element.isSwing }.map { $0.offset })
+            swingSets.insert(swing)
+            plantedCounts.append(6 - swing.count)
+        }
+        XCTAssertGreaterThanOrEqual(plantedCounts.min() ?? 0, MotorSystem.minSupportLegs,
+                                    "gait let the fly lift too many legs (min planted \(plantedCounts.min() ?? -1))")
+        // Support must straddle the body: an all-left or all-right tripod is
+        // not statically stable, so that must never happen.
+        for swing in swingSets where swing.count < 3 {
+            let leftPlanted = (0..<3).filter { !swing.contains($0) }.count
+            let rightPlanted = (3..<6).filter { !swing.contains($0) }.count
+            XCTAssertGreaterThanOrEqual(leftPlanted, 1, "support entirely on the right side")
+            XCTAssertGreaterThanOrEqual(rightPlanted, 1, "support entirely on the left side")
+        }
+    }
+
+    /// The alternating tripod is the observed walking pattern, and the point of
+    /// the design is that it EMERGES from the support constraint rather than
+    /// being scripted. Over a few hundred milliseconds the only swing sets the
+    /// gait may visit are the two canonical tripods (occasionally one leg
+    /// alone during a transition).
+    func testGaitConvergesToAlternatingTripod() {
+        let motor = MotorSystem()
+        let tripodA: Set<Int> = [0, 1, 3]
+        let tripodB: Set<Int> = [2, 4, 5]
+        var visited: Set<Set<Int>> = []
+        for _ in 0..<4000 {
+            motor.update(neuralDrive: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8], dt: 0.1)
+            let swing = Set(motor.legs.enumerated().filter { $0.element.isSwing }.map { $0.offset })
+            visited.insert(swing)
+        }
+        for swing in visited {
+            let allowed = swing.isSubset(of: tripodA)
+                || swing.isSubset(of: tripodB)
+                || swing.count <= 1
+            XCTAssertTrue(allowed, "non-tripod swing set \(swing.sorted()) — gait is not the emergent tripod")
+        }
+        XCTAssertTrue(visited.contains(tripodA), "tripod {left-front, left-mid, right-hind} never occurred")
+        XCTAssertTrue(visited.contains(tripodB), "tripod {right-front, right-mid, left-hind} never occurred")
     }
 
     func testBehaviorClassifierObservesOnly() {

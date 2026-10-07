@@ -190,18 +190,34 @@ public final class MotorSystem {
                 if leg.swingTimeMs >= Self.minSwingMs {
                     leg.isSwing = false
                     leg.swingTimeMs = 0
+                    leg.stanceTimeMs = 0         // touchdown: a NEW stance starts
                     leg.phase = 0.5              // touchdown = stance begin
                 }
             } else {
-                let neuralStep = drive >= Self.stepActivityThreshold
-                let contralateralPlanted = plantedNeighbours(of: i) >= Self.minSupportLegs
-                let mechanicalTimeout = leg.stanceTimeMs >= Self.maxStanceMs
-                if (neuralStep && contralateralPlanted) || mechanicalTimeout {
+                // A leg may only lift if the remaining planted legs can carry
+                // the load. The support requirement is ABSOLUTE: the drift
+                // timeout below requests a step (a foot that has stayed down
+                // too long must be repositioned), it does not grant one. OR-ing
+                // the timeout with the support check — which is what this code
+                // used to do — let every leg bypass support at once, so after
+                // maxStanceMs of simulated time all six legs lifted together
+                // and the fly had no feet on the ground at all.
+                let wantsStep = drive >= Self.stepActivityThreshold
+                    || leg.stanceTimeMs >= Self.maxStanceMs
+                let canLift = supportWouldBeStable(without: i)
+                if wantsStep && canLift {
                     leg.isSwing = true
                     leg.swingTimeMs = 0
                     leg.phase = 0               // liftoff
                 }
             }
+            // Publish the decision immediately. `leg` is a copy, and the write
+            // back used to happen only at the end of the loop body, so every
+            // leg in one tick was judged against the same pre-update snapshot
+            // and all of them could pass `canLift` simultaneously. Writing it
+            // here serialises the choice: the next leg sees whether THIS leg
+            // actually lifted, which is what makes the tripod pattern emerge.
+            legs[i] = leg
             // phase is a *readout* of the mechanical cycle, advanced by the
             // stride rate (which is neural), never by a fixed offset
             let strideRate = drive * MotorSystem.strideRatePerUnitDrive   // cycles/s
@@ -285,6 +301,28 @@ public final class MotorSystem {
             if !l.isSwing { n += 1 }
         }
         return n
+    }
+
+    /// Whether `i` may lift at all, judged from the CURRENT mechanical state.
+    ///
+    /// Two conditions, both physical:
+    ///   * enough legs remain planted to carry the load (`minSupportLegs`), and
+    ///   * those legs straddle the body — at least one on each side. A tripod
+    ///     is statically stable only if its support polygon contains the
+    ///     centre of mass, and {right-front, right-mid, right-hind} does not.
+    ///     Without this check the fly happily stands on one side.
+    ///
+    /// This counts leg `i` as lifted, so calling it before flipping the flag
+    /// answers exactly "would the remaining support be stable?".
+    func supportWouldBeStable(without i: Int) -> Bool {
+        var leftPlanted = 0
+        var rightPlanted = 0
+        for (j, l) in legs.enumerated() where j != i {
+            if l.isSwing { continue }
+            if j < 3 { leftPlanted += 1 } else { rightPlanted += 1 }
+        }
+        return leftPlanted + rightPlanted >= Self.minSupportLegs
+            && leftPlanted >= 1 && rightPlanted >= 1
     }
 
     /// Reset all joints.

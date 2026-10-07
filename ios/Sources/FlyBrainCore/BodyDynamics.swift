@@ -116,7 +116,11 @@ public struct PhysicsParameters: Sendable {
 /// Full rigid-body state of the fly (single torso + massless actuators).
 /// Quaternion order is (x, y, z, w).
 public struct RigidBody: Sendable {
-    public var position: SIMD3<Float> = SIMD3(0, 0, 0.8)
+    /// Body origin (thorax centre) in world coordinates. Y-UP world. The default
+    /// here is only a placeholder — `BodyDynamics.init` places the body on the
+    /// substrate at the standing height, and `teleport` / the app's spawn call
+    /// set the real value. A non-zero z here was a leftover z-up assumption.
+    public var position: SIMD3<Float> = SIMD3(0, 0, 0)
     public var velocity: SIMD3<Float> = SIMD3(0, 0, 0)
     /// Orientation as a unit quaternion (x, y, z, w); level, facing +x,
     /// dorsal (body +y) aligned with world up. Y-up world — see `dorsal`.
@@ -219,14 +223,18 @@ public struct BodyDynamics: Sendable {
     public init(parameters: PhysicsParameters = PhysicsParameters()) {
         self.parameters = parameters
         self.body = RigidBody()
-        self.body.position = SIMD3(0, 0, parameters.groundY + parameters.standHeightMm)
+        // Y-UP world: height above the substrate is the Y component. Writing
+        // the standing height into z (as this used to) left y = 0, so the fly
+        // spawned buried in the ground plane and the contact solver jettisoned
+        // it on the first step.
+        self.body.position = SIMD3(0, parameters.groundY + parameters.standHeightMm, 0)
     }
 
     /// Position of the body centre (mm).
     public var position: SIMD3<Float> { body.position }
     /// Body forward (+x body axis) in world coordinates.
     public var forward: SIMD3<Float> { body.forward }
-    /// Body dorsal (+z body axis) in world coordinates.
+    /// Body dorsal (+y body axis) in world coordinates — points at the sky.
     public var up: SIMD3<Float> { body.dorsal }
     /// Tarsus plane is in contact with the substrate.
     public var isGrounded: Bool { body.grounded }

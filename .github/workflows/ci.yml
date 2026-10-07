@@ -27,6 +27,7 @@ jobs:
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py
+          python tools/sim_motor_system.py
           python tools/verify_body_physics.py
       - name: Ingest fixture (FlyWire pilot)
         run: |

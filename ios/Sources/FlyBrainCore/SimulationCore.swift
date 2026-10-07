@@ -44,10 +44,13 @@ public final class SimulationCore: @unchecked Sendable {
         world = w
     }
 
-    // Fly pose/position (embodiment, spec #18)
-    public private(set) var position: SIMD3<Float> = SIMD3(0, 0, 1)
+    // Fly pose/position (embodiment, spec #18). Y-UP world: dorsal is +y.
+    // These are only the pre-step defaults — `integrateLocomotion` republishes
+    // them from the rigid body on every step, and `setPose` is what the app
+    // calls to place the fly.
+    public private(set) var position: SIMD3<Float> = SIMD3(0, 0.8, 0)
     public private(set) var forward: SIMD3<Float> = SIMD3(1, 0, 0)
-    public private(set) var up: SIMD3<Float> = SIMD3(0, 0, 1)
+    public private(set) var up: SIMD3<Float> = SIMD3(0, 1, 0)
 
     /// Passive behavior classifier (spec #43/#44) — observes, never controls.
     public let behavior: BehaviorClassifier

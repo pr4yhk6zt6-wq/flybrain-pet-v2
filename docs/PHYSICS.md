@@ -82,6 +82,30 @@ exactly when, and only when, the wing neuropil drives the wings. The mirror
   body, but nothing ever resolved obstacles against it. `resolveSceneCollision`
   now corrects the solver position and removes the momentum absorbed by the
   obstacle.
+- **The walking gait lifted all six legs.** The stance→swing decision OR-ed a
+  mechanical drift timeout with the support requirement, so once
+  `maxStanceMs` had elapsed every leg timed out on the same tick. Support is
+  now ABSOLUTE (the timeout may request a step, not grant one), the check
+  additionally requires the remaining legs to straddle the body (a tripod of
+  three legs on one side is not statically stable), and each leg's decision is
+  published immediately so the next leg judges the real state rather than a
+  stale snapshot. The alternating tripod now EMERGES from the constraint:
+  over 400 ms the gait visits only `{left-front, left-mid, right-hind}` and
+  `{right-front, right-mid, left-hind}` with 3 legs always planted. Verified by
+  `tools/sim_motor_system.py` (gating) and
+  `SensoryTests.testGaitAlwaysKeepsSupport` /
+  `testGaitConvergesToAlternatingTripod`.
+- **Y-up spawn leftovers.** `BodyDynamics.init` wrote the standing height into
+  z (leaving y = 0, i.e. buried in the ground plane), and the app spawned with
+  `up = +z`; both are now y-up.
+
+## Why the offline mirrors exist
+
+There is no Swift toolchain on the development device, so every physics change
+is first reproduced line-by-line in Python (`tools/sim_*.py`), calibrated
+against measured fly data, and only then written in Swift. The mirrors are
+gating in CI, and they have found every bug listed above except the two API
+mismatches that only the real compiler could see.
 
 ## Approximation ledger (must stay honest)
 

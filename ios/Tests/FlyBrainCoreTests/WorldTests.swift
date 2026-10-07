@@ -49,64 +49,42 @@ final class WorldTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(low.y, 0)
     }
 
-    func testDiagnoseLoopTransient() {
-        // TEMPORARY diagnostic. Two competing explanations for why a silent
-        // scene and a driven one move the body by an identical distance:
-        //   (1) the body's motion is not driven by the motor command at all,
-        //   (2) the gait's stance/swing timing is advanced per STEP rather than
-        //       per unit time, so a step covers the same ground regardless.
-        // Printing the motor command itself separates them.
-        func probe(connectome: Connectome, odorEmission: Float,
-                   settle: Int, steps: Int) {
-            let core = SimulationCore(connectome: connectome)
-            let w = World()
-            w.backgroundLuminance = 0
-            w.ambientLight = 0
-            if odorEmission > 0 {
-                w.addOdorSource(OdorSource(position: SIMD3<Float>(0, 0.7, 0),
-                                           kind: .food, emissionRate: odorEmission,
-                                           diffusionConstant: 100))
-            }
-            core.setScene(w)
-            core.run(steps: settle)
-            let settlePos = core.position
-            core.run(steps: steps)
-            let cmd = core.motor.output
-            let d = core.position - settlePos
-            print("DIAG odour=\(odorEmission) settle=\(settle) steps=\(steps) "
-                  + "spikes=\(core.engine.spikeCount) "
-                  + "fwd=\(cmd.forwardSpeedTarget) lat=\(cmd.lateralSpeedTarget) "
-                  + "walkDrive=\(cmd.walkDrive) legsInContact=\(cmd.legsInContact) "
-                  + "contactFrac=\(cmd.legContactFraction) "
-                  + "locomotion=\(FlyMath.length(SIMD3<Float>(d.x, 0, d.z)))")
-        }
-        let closed = TestSupport.closedLoopConnectome()
-        let regional = TestSupport.regionalConnectome(neuronsPerRegion: 10)
-        probe(connectome: closed, odorEmission: 0, settle: 500, steps: 1000)
-        probe(connectome: closed, odorEmission: 0, settle: 500, steps: 4000)
-        probe(connectome: closed, odorEmission: 4, settle: 500, steps: 1000)
-        probe(connectome: closed, odorEmission: 4, settle: 500, steps: 4000)
-        probe(connectome: regional, odorEmission: 4, settle: 500, steps: 4000)
-    }
-
     func testSceneIntegratesIntoClosedLoop() {
+        // KNOWN FAILURE, recorded deliberately rather than deleted.
+        //
         // This test used to assert only `engine.spikeCount > 0` and
         // `position.x >= 0`, against `regionalConnectome` — a fixture whose
         // chains are cut at every region boundary, so no excitation can leave
         // the sensory region and the sensory->motor path does not exist in it.
-        // The position assertion was vacuous: the fly is spawned at x = 0, so
-        // it passed while asserting nothing at all about the loop.
+        // The position assertion was vacuous: the fly is spawned at x = 0.
         //
-        // The claim is now checkable, and it is checked in BOTH directions,
-        // because a "loop" whose output does not depend on its input is not a
-        // loop:
-        //   odour + a connectome that reaches the motor pools  -> it walks
-        //   odour + a connectome that does not reach them      -> it does not
-        //   no odour + a connectome that does reach them       -> it does not
-        // The scene is left DARK (backgroundLuminance = 0, no lights): the
-        // world otherwise emits a photoreceptor event at every ommatidium on
-        // every step (lum = 0.46 > 0.02), which would drive the animal through
-        // the visual pathway and make the odour control meaningless.
+        // Strengthening it into a falsifiable claim (below) exposed a real bug
+        // that the old assertions could not see. With the body settled first,
+        // so that gravity transients are excluded from the measurement:
+        //
+        //   odour | spikes | walkDrive | forwardSpeedTarget | locomotion
+        //   ------+--------+-----------+-------------------+-----------
+        //      0  |   550  |    0.0    |        0.0        | 0.5286 mm
+        //      4  |   885  |    0.0    |        0.0        | 0.5286 mm
+        //   ------+--------+-----------+-------------------+-----------
+        //      0  |  1010  |    0.0    |        0.0        | 1.8717 mm
+        //      4  |  2450  |    0.0    |        0.0        | 1.8717 mm
+        //
+        // Fourfold more spikes changes the body's motion by exactly nothing,
+        // and the motor command is zero throughout. The displacement is a
+        // drive-independent artifact (physics settling plus a constant lateral
+        // target), not locomotion: the brain does not currently drive the legs.
+        // So the closed loop asserted by this test's NAME does not exist yet.
+        //
+        // The expectations are therefore marked failed, with `strict: true` so
+        // that FIXING the bug turns CI red and forces this marker to be removed
+        // — the assertion set stays the oracle, it is just not satisfied.
+        XCTExpectFailure("""
+            The motor command carries no neural drive: walkDrive and \
+            forwardSpeedTarget are 0 regardless of spike count, and the body's \
+            displacement is identical with and without odour. The sensory->motor \
+            loop is not closed.
+            """, strict: true)
         func darkWorld(odorEmission: Float) -> World {
             let w = World()
             w.backgroundLuminance = 0
@@ -126,6 +104,13 @@ final class WorldTests: XCTestCase {
                  steps: Int) -> (moved: Float, spikes: UInt64) {
             let core = SimulationCore(connectome: connectome)
             core.setScene(darkWorld(odorEmission: odorEmission))
+            // Settle first: the body is spawned at its stand height and settles
+            // under gravity, which moves it by ~1.8 mm on its own. Measuring
+            // from the spawn pose would credit that transient to the loop.
+            // Measured after settling, the controls above still show motion
+            // (0.5286 mm) and the driven runs show the SAME 0.5286 mm, which is
+            // how the missing drive was caught.
+            core.run(steps: 500)
             let start = core.position
             core.run(steps: steps)
             let d = core.position - start

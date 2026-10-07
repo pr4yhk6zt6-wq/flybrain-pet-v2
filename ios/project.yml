@@ -59,6 +59,14 @@ targets:
     platform: iOS
     sources:
       - path: Tests/FlyBrainCoreTests
+      # The real Python-written asset IS a test fixture, not app content: the
+      # worst bug in this project was a header field Python wrote as an integer
+      # while Swift decoded a String, so no pipeline asset could be opened at
+      # all — and nothing on the Swift side ever loaded one. Bundling the demo
+      # (480 neurons, produced by flybrain/pack.py) makes the cross-language
+      # format contract a gated, executable test rather than a reading exercise.
+      - path: ../data/generated/demo_micro.fbpack
+        buildPhase: resources
     dependencies:
       - target: FlyBrainCore
 schemes:

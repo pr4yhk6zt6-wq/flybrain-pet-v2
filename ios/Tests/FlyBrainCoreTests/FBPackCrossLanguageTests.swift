@@ -20,20 +20,27 @@ import XCTest
 final class FBPackCrossLanguageTests: XCTestCase {
 
     private func pipelineAssetURL() throws -> URL {
-        let bundle = Bundle(for: FBPackCrossLanguageTests.self)
-        // SwiftPM (.copy) places the file at the bundle root; XcodeGen may nest
-        // it under the source directory's name, so try both layouts.
-        for sub in [nil, "Resources"] {
-            if let url = bundle.url(forResource: "demo_micro", withExtension: "fbpack",
-                                    subdirectory: sub) {
-                return url
-            }
-        }
-        // The core framework's own bundle, if the resource lands there instead.
-        for sub in [nil, "Resources"] {
-            if let url = Bundle(for: Connectome.self)
-                .url(forResource: "demo_micro", withExtension: "fbpack", subdirectory: sub) {
-                return url
+        // The two build systems put the resource in different places.
+        //  - SwiftPM (`swift test`, what CI runs) collects target resources
+        //    into a SEPARATE .bundle that only `Bundle.module` points at;
+        //    `Bundle(for:)` is the test runner's bundle and does not see it.
+        //  - Xcode/Xcodegen copies it into the test bundle, where `Bundle(for:)`
+        //    finds it (possibly nested under the source directory's name).
+        // `SWIFT_PACKAGE` is defined only by SwiftPM, so `Bundle.module` is not
+        // referenced in the Xcode build (where that symbol does not exist).
+        var bundles: [Bundle] = []
+        #if SWIFT_PACKAGE
+        bundles.append(Bundle.module)
+        #else
+        bundles.append(Bundle(for: FBPackCrossLanguageTests.self))
+        bundles.append(Bundle(for: Connectome.self))
+        #endif
+        for bundle in bundles {
+            for sub in [nil, "Resources"] {
+                if let url = bundle.url(forResource: "demo_micro", withExtension: "fbpack",
+                                        subdirectory: sub) {
+                    return url
+                }
             }
         }
         XCTFail("demo_micro.fbpack is not in any test bundle — the Python "

@@ -21,13 +21,20 @@ final class FBPackCrossLanguageTests: XCTestCase {
 
     private func pipelineAssetURL() throws -> URL {
         let bundle = Bundle(for: FBPackCrossLanguageTests.self)
-        if let url = bundle.url(forResource: "demo_micro", withExtension: "fbpack") {
-            return url
+        // SwiftPM (.copy) places the file at the bundle root; XcodeGen may nest
+        // it under the source directory's name, so try both layouts.
+        for sub in [nil, "Resources"] {
+            if let url = bundle.url(forResource: "demo_micro", withExtension: "fbpack",
+                                    subdirectory: sub) {
+                return url
+            }
         }
         // The core framework's own bundle, if the resource lands there instead.
-        if let url = Bundle(for: Connectome.self)
-            .url(forResource: "demo_micro", withExtension: "fbpack") {
-            return url
+        for sub in [nil, "Resources"] {
+            if let url = Bundle(for: Connectome.self)
+                .url(forResource: "demo_micro", withExtension: "fbpack", subdirectory: sub) {
+                return url
+            }
         }
         XCTFail("demo_micro.fbpack is not in any test bundle — the Python "
                 + "pipeline asset must be a test resource for this gate to mean anything")

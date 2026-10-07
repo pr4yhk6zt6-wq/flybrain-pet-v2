@@ -18,10 +18,17 @@ jobs:
         run: pip install -r python/requirements.txt
       - name: Run pytest
         run: python -m pytest python/tests -v
-      - name: Generate + validate demo asset
+      - name: Validate the committed asset + exercise the generator
         run: |
-          python tools/gen_synth.py data/generated/demo_micro.fbpack
+          # The committed asset is the contract the Swift tests load, so it is
+          # validated as-is. The generator is exercised to a scratch path: it is
+          # not byte-reproducible (header date + time-seeded network), so
+          # regenerating over the committed file would churn it every run.
           python tools/tests/validate_fbpack.py data/generated/demo_micro.fbpack
+          python tools/gen_synth.py /tmp/demo_regen.fbpack
+          python tools/tests/validate_fbpack.py /tmp/demo_regen.fbpack
+      - name: Swift test fixture must match the pipeline asset
+        run: python tools/sync_test_asset.py --check
       - name: Neural engine offline mirror (parity with Swift)
         run: python tools/check_tests.py
       - name: Body physics offline gates (calibration + regression)

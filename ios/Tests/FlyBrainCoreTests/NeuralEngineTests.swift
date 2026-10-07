@@ -398,6 +398,68 @@ final class NeuralEngineTests: XCTestCase {
         }
     }
 
+    func testLeakyRateTracksTrueFiringRate() {
+        // The motor readout used the tumbling `recent` window, which is cleared
+        // wholesale when it rolls — so the value depends on WHEN it is sampled
+        // and reads 0 for most of every window. At the current neural clock
+        // (0.1 ms/step, 4 steps per 60 Hz frame ≈ 42x slow motion) a 1 s neural
+        // window is ~42 s of WALL time, so the fly could not change its drive
+        // in under 40 s. The leaky rate must instead TRACK the real rate.
+        let c = TestSupport.chainConnectome(count: 2, efficacy: 0.5)
+        var params = SimulationParameters()
+        params.seed = 5
+        let engine = NeuralEngine(connectome: c, parameters: params)
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                               pulses: 20, intervalMs: 50, current: 400)
+        var acc: Float = 0, n = 0
+        for _ in 0..<900 {
+            engine.run(steps: 10)
+            acc += engine.rateHz(of: 0)
+            n += 1
+        }
+        let meanEst = acc / Float(n)
+        let trueRate = Float(engine.totalSpikes(of: 0)) / Float(engine.currentTimeMs / 1000)
+        XCTAssertGreaterThan(trueRate, 0)
+        XCTAssertLessThan(abs(meanEst - trueRate) / trueRate, 0.15,
+                          "mean estimate \(meanEst) Hz must track the true rate \(trueRate) Hz")
+    }
+
+    func testLeakyRateNeverReadsZeroWhileFiring() {
+        // The exact failure of the tumbling window: 0 at almost every instant.
+        let c = TestSupport.chainConnectome(count: 2, efficacy: 0.5)
+        var params = SimulationParameters()
+        params.seed = 5
+        let engine = NeuralEngine(connectome: c, parameters: params)
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                               pulses: 40, intervalMs: 25, current: 400)
+        engine.run(steps: 3000)
+        var lo: Float = .greatestFiniteMagnitude
+        for _ in 0..<100 {
+            engine.run(steps: 1)
+            lo = min(lo, engine.rateHz(of: 0))
+        }
+        XCTAssertGreaterThan(lo, 1.0,
+                             "estimate dropped to \(lo) Hz while the neuron was firing steadily")
+    }
+
+    func testLeakyRateSurvivesSnapshotRestore() {
+        // The rate feeds the body's motion, so losing it on restore would make
+        // a restored run behave differently from the original (spec #63).
+        let c = TestSupport.chainConnectome(count: 4, efficacy: 0.5)
+        var params = SimulationParameters()
+        params.seed = 7
+        let engine = NeuralEngine(connectome: c, parameters: params)
+        TestSupport.driveBurst(engine: engine, neuron: 0, startMs: 1.0,
+                               pulses: 10, intervalMs: 30, current: 400)
+        engine.run(steps: 500)
+        let live = engine.rateHz(of: 0)
+        let snap = engine.snapshot()
+        engine.run(steps: 1000)
+        engine.restore(snap)
+        XCTAssertEqual(engine.rateHz(of: 0), live, accuracy: 1e-6,
+                       "the leaky rate must survive snapshot/restore")
+    }
+
     func testTelemetryIsReal() {
         let c = TestSupport.chainConnectome(count: 4, efficacy: 0.9)
         var params = SimulationParameters()

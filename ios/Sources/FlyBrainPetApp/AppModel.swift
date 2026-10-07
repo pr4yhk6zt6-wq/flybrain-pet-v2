@@ -67,7 +67,24 @@ final class AppModel: ObservableObject {
     /// Advance the shared simulation (called from render loop / timer).
     func tick() {
         guard let core else { return }
-        core.run(steps: 4)   // 4 × 0.1ms per 60Hz frame → 24ms/s neural time
+        // 4 × 0.1 ms = 0.4 ms of NEURAL time per 60 Hz frame, i.e. 24 ms of
+        // neural time per second of wall time — roughly 42x slow motion. That
+        // is a deliberate choice, not a bug: at 0.1 ms per step, running the
+        // 0.8 ms between two spiking neurons at true speed would need ~8,000
+        // such steps per frame on an A13. The honest consequence is that the
+        // fly does not move at fly speed; see `realTimeFactor` and
+        // tools/measure_time_scale.py.
+        core.run(steps: 4)
+    }
+
+    /// How much slower than real time the simulation currently runs
+    /// (neural time elapsed per second of wall time, 0..1). Reported so the
+    /// UI never implies real-time behaviour that the device cannot deliver.
+    var realTimeFactor: Double {
+        guard let core else { return 0 }
+        let neuralMsPerFrame = core.parameters.dt * 4.0
+        let realMsPerFrame = 1000.0 / 60.0
+        return neuralMsPerFrame / realMsPerFrame
     }
 
     // MARK: - Player interaction (environment only, spec #42/#54)

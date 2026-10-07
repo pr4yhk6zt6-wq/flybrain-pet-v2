@@ -57,6 +57,14 @@ exactly when, and only when, the wing neuropil drives the wings. The mirror
   while the body solver is in **seconds** (mm/mg/s/nN). The dt was being passed
   straight through, so gravity and drag were 1000× too weak per step and the
   joint integrator in `MotorSystem` mixed ms into a rate term.
+- **Time scale is not real time, and must not be implied.** The neural clock
+  advances 0.4 ms per 60 Hz frame (4 steps × 0.1 ms), i.e. **~42× slow motion**
+  relative to wall time (`tools/measure_time_scale.py`). Consequences that are
+  easy to miss: any neural-timescale window (the 1 s recent-spike counter) takes
+  ~42 s of real time to roll, so signals read from such windows cannot drive a
+  per-frame loop — see MOTOR_SYSTEM.md. `AppModel.realTimeFactor` exposes the
+  factor. Making the clock faster is a device budget question (true speed would
+  need ~8,000 steps/frame), not a tuning constant.
 - **Ground contact.** The old code clamped `position.y` back to the surface on
   every step, which deleted the penetration the normal force is derived from and
   applied the contact force only while already sinking — a resting fly received

@@ -58,6 +58,13 @@ class Engine:
         self.recentRing = []
         self.recentWindowMs = 1000.0
         self.recentWindowStart = 0.0
+        # Leaky firing-rate estimate (Hz) — the signal the motor readout uses
+        # instead of the tumbling `recent` window, which reports 0 for most of
+        # every window and lags by up to its full length (~42 s of wall time at
+        # the current 42x slow-motion factor).
+        self.rate = [0.0] * n
+        self.rateRing = []
+        self.motorRateTauMs = 20.0
 
     # --- xorshift64* -------------------------------------------------------
     def nextRandom(self):
@@ -118,9 +125,22 @@ class Engine:
                     self.refractoryRing.append(i)
                 self.w[i] += self.a[i]
                 self.emit(i, stepTime)
+        # leaky firing-rate decay (O(active) — only non-zero estimates decay)
+        if self.rateRing:
+            import math as _m
+            step_factor = _m.exp(-self.dt / max(self.motorRateTauMs, 0.001))
+            spike_add = 1000.0 / max(self.motorRateTauMs, 0.001)
+            kept = []
+            for i in self.rateRing:
+                nxt = self.rate[i] * step_factor
+                if nxt > spike_add * 0.001:
+                    self.rate[i] = nxt
+                    kept.append(i)
+                else:
+                    self.rate[i] = 0.0
+            self.rateRing = kept
         # tumbling recent-spike window (see Swift: the old decay wiped any
-        # counter below 2500 to zero every 10 ms, so recentSpikes() — the
-        # motor drive's only real input — always read 0)
+        # counter below 2500 to zero every 10 ms, so recentSpikes() always read 0)
         if (stepTime - self.recentWindowStart) >= self.recentWindowMs:
             for i in self.recentRing:
                 self.recent[i] = 0
@@ -131,6 +151,9 @@ class Engine:
     def emit(self, neuron, time):
         self.cum[neuron] += 1
         self.cumTotal += 1
+        if self.rate[neuron] == 0:
+            self.rateRing.append(neuron)
+        self.rate[neuron] += 1000.0 / max(self.motorRateTauMs, 0.001)
         if self.recent[neuron] == 0:
             self.recentRing.append(neuron)
         self.recent[neuron] += 1

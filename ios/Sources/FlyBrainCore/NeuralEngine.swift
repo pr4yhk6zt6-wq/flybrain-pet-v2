@@ -274,6 +274,26 @@ public final class NeuralEngine: @unchecked Sendable {
     /// was wiped to zero every 10 ms — see the decay code in `step()`).
     private var recentRing: [Int32] = []
 
+    /// Leaky firing-rate estimate per neuron, in Hz, updated incrementally.
+    ///
+    /// `recentSpikesPerNeuron` is an INSPECTION window: it is a tumbling
+    /// counter, cleared wholesale when the 1 s window rolls, so using it as a
+    /// drive signal reports zero for most of every window and then a lump.
+    /// That is wrong for the motor system in two ways: the value depends on
+    /// WHEN it is sampled (so it is not a rate at all), and with the neural
+    /// clock running ~42x slower than real time a 1 s neural window is ~42 s
+    /// of wall time, so the animal could not change its drive quickly. The
+    /// motor readout therefore uses a properly leaky rate instead: it responds
+    /// on a sensorimotor timescale and reads correctly at any instant.
+    public private(set) var leakyRatePerNeuron: [Float]
+    private var leakyRateRing: [Int32] = []
+
+    /// Sensorimotor rate time constant, in ms of NEURAL time.
+    /// INFERRED: insect leg motor neurons follow descending drive on a
+    /// ~10-50 ms timescale (SCIENCE_SOURCES.md); this is deliberately far
+    /// shorter than the 1 s inspection window, which is not a motor timescale.
+    public var motorRateTauMs: Float = 20
+
     /// Scratch buffers reused across steps. Allocating a fresh Set and Array
     /// per step was the other hot-loop heap cost; `step()` has a single owner
     /// and is not reentrant, so reuse is safe.
@@ -297,6 +317,7 @@ public final class NeuralEngine: @unchecked Sendable {
         self.spikeAccumulator = [Float](repeating: 0, count: n)
         self.recentSpikesPerNeuron = [UInt16](repeating: 0, count: n)
         self.cumulativeSpikes = [UInt32](repeating: 0, count: n)
+        self.leakyRatePerNeuron = [Float](repeating: 0, count: n)
         // Sentinel so the first spike of second-bucket 0 is counted.
         self.activeWindowMark = [UInt32](repeating: UInt32.max, count: n)
 
@@ -373,6 +394,33 @@ public final class NeuralEngine: @unchecked Sendable {
             refractoryRing.removeLast(refractoryRing.count - w)
         }
 
+        // 0b) Decay the leaky firing-rate estimate. Same incremental discipline:
+        // only neurons with a non-zero estimate can decay, so this is O(active).
+        // A neuron is dropped from the set once its estimate reaches zero.
+        if !leakyRateRing.isEmpty {
+            // Per-step retention for an exponential decay with time constant
+            // tau: rate <- rate * exp(-dt/tau); a spike adds 1000/tau Hz (so a
+            // neuron firing at rate R settles at R).
+            let stepFactor = Float(exp(-Double(dt) / Double(max(motorRateTauMs, 0.001))))
+            let spikeAdd = 1000.0 / max(motorRateTauMs, 0.001)
+            var w = 0
+            for k in 0..<leakyRateRing.count {
+                let i = Int(leakyRateRing[k])
+                let next = leakyRatePerNeuron[i] * stepFactor
+                leakyRatePerNeuron[i] = next
+                // Keep the invariant that the ring holds EXACTLY the non-zero
+                // estimates: entries that have decayed below the smallest
+                // representable increment are clamped out, so the set cannot
+                // grow without bound over a long run.
+                if next > spikeAdd * 0.001 {
+                    leakyRateRing[w] = leakyRateRing[k]; w += 1
+                } else {
+                    leakyRatePerNeuron[i] = 0
+                }
+            }
+            leakyRateRing.removeLast(leakyRateRing.count - w)
+        }
+
         // 1) Deliver all events at or before stepTime
         stepTouched.removeAll(keepingCapacity: true)
         stepTouchedSet.removeAll(keepingCapacity: true)
@@ -444,6 +492,12 @@ public final class NeuralEngine: @unchecked Sendable {
         spikeCount += 1
         spikeEventsThisWindow += 1
         let ri = Int(neuron)
+        // leaky firing-rate estimate (Hz) — the drive signal the motor system
+        // reads. Incremental: an existing entry is decayed by the same factor
+        // used in the decay pass, a new one is seeded at zero first so the two
+        // paths agree exactly.
+        if leakyRatePerNeuron[ri] == 0 { leakyRateRing.append(neuron) }
+        leakyRatePerNeuron[ri] += 1000.0 / max(motorRateTauMs, 0.001)
         if recentSpikesPerNeuron[ri] == 0 { recentRing.append(neuron) }
         if recentSpikesPerNeuron[ri] < .max { recentSpikesPerNeuron[ri] &+= 1 }
         if cumulativeSpikes[ri] < .max { cumulativeSpikes[ri] &+= 1 }
@@ -527,6 +581,10 @@ public final class NeuralEngine: @unchecked Sendable {
     /// Indices whose recent-spike counter is non-zero.
     public var recentActiveNeurons: [Int32] { recentRing }
 
+    /// Indices with a non-zero leaky firing-rate estimate (the motor drive
+    /// set — responsive on a sensorimotor timescale, unlike `recentRing`).
+    public var firingActiveNeurons: [Int32] { leakyRateRing }
+
     /// Recent spike count of a neuron (for raster/inspector).
     public func recentSpikes(of neuron: Int32) -> Int {
         guard neuron >= 0 && Int(neuron) < recentSpikesPerNeuron.count else { return 0 }
@@ -537,6 +595,15 @@ public final class NeuralEngine: @unchecked Sendable {
     public func totalSpikes(of neuron: Int32) -> Int {
         guard neuron >= 0 && Int(neuron) < cumulativeSpikes.count else { return 0 }
         return Int(cumulativeSpikes[Int(neuron)])
+    }
+
+    /// Leaky firing-rate estimate of a neuron, in Hz, updated every step.
+    /// Unlike `recentSpikes` this is not a tumbling inspection window: it can
+    /// be sampled at any instant and reported as a rate, and it responds on a
+    /// sensorimotor timescale (`motorRateTauMs`) rather than the 1 s window.
+    public func rateHz(of neuron: Int32) -> Float {
+        guard neuron >= 0 && Int(neuron) < leakyRatePerNeuron.count else { return 0 }
+        return leakyRatePerNeuron[Int(neuron)]
     }
 
     public func firingRate(of neuron: Int32) -> Float {
@@ -589,6 +656,10 @@ public final class NeuralEngine: @unchecked Sendable {
         public var adaptation: Float
         public var refractoryRemaining: Float
         public var lastSpikeTime: Double
+        /// Leaky motor-drive rate (Hz). Captured because it feeds the motor
+        /// readout, so leaving it out would make snapshot/restore
+        /// non-deterministic in the body's motion (spec #63).
+        public var leakyRate: Float
     }
 
     public func snapshot() -> EngineSnapshot {
@@ -598,11 +669,12 @@ public final class NeuralEngine: @unchecked Sendable {
             rngState: rngState,
             spikeCount: spikeCount,
             eventSeq: eventSeq,
-            dynamics: dynamics.map {
-                NeuronDynamicsSnapshot(voltage: $0.voltage, firingRate: $0.firingRate,
-                                       adaptation: $0.adaptation,
-                                       refractoryRemaining: $0.refractoryRemaining,
-                                       lastSpikeTime: $0.lastSpikeTime)
+            dynamics: dynamics.enumerated().map { (i, d) in
+                NeuronDynamicsSnapshot(voltage: d.voltage, firingRate: d.firingRate,
+                                       adaptation: d.adaptation,
+                                       refractoryRemaining: d.refractoryRemaining,
+                                       lastSpikeTime: d.lastSpikeTime,
+                                       leakyRate: leakyRatePerNeuron[i])
             },
             events: eventHeap.allItems
         )
@@ -623,6 +695,7 @@ public final class NeuralEngine: @unchecked Sendable {
             dynamics[i].adaptation = d.adaptation
             dynamics[i].refractoryRemaining = d.refractoryRemaining
             dynamics[i].lastSpikeTime = d.lastSpikeTime
+            leakyRatePerNeuron[i] = d.leakyRate
         }
         eventHeap.rebuild(from: snap.events)
 
@@ -632,11 +705,15 @@ public final class NeuralEngine: @unchecked Sendable {
         // restored refractory window, or keep visiting neurons that are zero).
         refractoryRing.removeAll(keepingCapacity: true)
         recentRing.removeAll(keepingCapacity: true)
+        leakyRateRing.removeAll(keepingCapacity: true)
         for i in 0..<dynamics.count where dynamics[i].refractoryRemaining > 0 {
             refractoryRing.append(Int32(i))
         }
         for i in 0..<recentSpikesPerNeuron.count where recentSpikesPerNeuron[i] > 0 {
             recentRing.append(Int32(i))
+        }
+        for i in 0..<leakyRatePerNeuron.count where leakyRatePerNeuron[i] > 0 {
+            leakyRateRing.append(Int32(i))
         }
     }
 }

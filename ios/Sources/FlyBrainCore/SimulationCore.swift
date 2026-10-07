@@ -67,6 +67,12 @@ public final class SimulationCore: @unchecked Sendable {
     /// Motor-neuron drive readout from VNC (per leg group + wing + proboscis).
     private var neuralDrive: [Float] = []
 
+    /// Leg-group firing rate (Hz) at which the drive saturates. INFERRED: a
+    /// single explicit reference scale replacing the three inconsistent
+    /// implicit ones (0.25-per-spike, /6, /4) that made identical activity
+    /// mean different things for legs, wings and proboscis.
+    public var motorDriveReferenceHz: Float = 100
+
     public init(connectome: Connectome,
                 parameters: SimulationParameters = SimulationParameters()) {
         self.connectome = connectome
@@ -152,31 +158,44 @@ public final class SimulationCore: @unchecked Sendable {
     /// Read per-group motor drive from current VNC/SEZ activity (real spikes).
     private func readMotorDrive() {
         var drive = [Float](repeating: 0, count: 6)  // 6 legs
-        var wing = 0
-        var sez = 0
-        // `recentSpikes > 0` is exactly the engine's recent active set, so walk
-        // that (O(active)) instead of scanning every neuron each step.
-        for idx in engine.recentActiveNeurons {
-            let spk = Float(engine.recentSpikes(of: idx))
-            guard spk > 0 else { continue }
+        var wing: Float = 0
+        var sez: Float = 0
+        // Drive comes from the leaky firing-rate estimate, NOT `recentSpikes`.
+        // That counter is a tumbling inspection window: it reports 0 for most
+        // of every window and then a lump, so the value depends on WHEN it is
+        // sampled — and with the neural clock running ~42x slower than real
+        // time (tools/measure_time_scale.py) a 1 s neural window is ~42 s of
+        // wall time, i.e. the fly could not change its leg drive in under 40 s.
+        // The leaky rate is sampleable at any instant and follows a
+        // sensorimotor timescale (`motorRateTauMs`).
+        //
+        // Walking the firing active set keeps this O(active) rather than a
+        // sweep of all 153,746 neurons per step.
+        for idx in engine.firingActiveNeurons {
+            let rate = engine.rateHz(of: idx)
+            guard rate > 0 else { continue }
             let n = connectome.neurons[Int(idx)]
             switch RegionID(rawValue: Int(n.region)) ?? .unknown {
             case .legNeuromere:
                 let slot = (n.side == 1 ? 0 : 1) * 3 + (Int(n.type) % 3)
-                if slot < drive.count { drive[slot] += spk * 0.25 }
+                if slot < drive.count { drive[slot] += rate }
             case .wingNeuropil:
-                wing += 1
+                wing += rate
             case .subesophagealZone:
-                sez += 1
+                sez += rate
             default:
                 break
             }
         }
-        let d = drive.map { min($0, 1) }
-        // refresh full 6-vector for motor CPG (neural drive per leg)
+        // The raw rate is in Hz and the CPG expects a normalised drive. There
+        // were three competing implicit scales (0.25 per spike, a /6 and a /4
+        // denominator) so the same activity meant different things per group.
+        // One explicit conversion: a group at `driveReferenceHz` saturates.
+        let reference = max(motorDriveReferenceHz, 1)
+        let d = drive.map { min($0 / reference, 1) }
         neuralDrive = d
-        motor.wingMuscleDrive = Float(wing) / 6
-        motor.proboscisDrive = Float(sez) / 4
+        motor.wingMuscleDrive = min(wing / reference, 1)
+        motor.proboscisDrive = min(sez / reference, 1)
     }
 
     /// Embody locomotion. The fly is a rigid body with mass and inertia; the
@@ -315,12 +334,13 @@ public final class SimulationCore: @unchecked Sendable {
 
     /// Energetic cost of activity (0..1) — placeholder for body work.
     public var activityLevel: Float {
-        // healthy proxy: some neurons in leg/wing neuropils fired recently.
-        // `recentSpikes > 0` is exactly what the engine's recent active set
-        // tracks, so walk that (O(active)) instead of scanning all neurons.
+        // Healthy proxy: leg/wing neurons firing right now. Uses the leaky
+        // firing active set for the same reason the motor readout does — this
+        // is consumed once per step, and the tumbling recent-spike window both
+        // lags by up to its full length and reports 0 for most of it.
         var active = 0
-        for idx in engine.recentActiveNeurons {
-            guard engine.recentSpikes(of: idx) > 0 else { continue }
+        for idx in engine.firingActiveNeurons {
+            guard engine.rateHz(of: idx) > 0 else { continue }
             let r = RegionID(rawValue: Int(connectome.neurons[Int(idx)].region)) ?? .unknown
             if r == .legNeuromere || r == .wingNeuropil { active += 1 }
         }
@@ -363,10 +383,11 @@ public final class BehaviorClassifier {
         var wingActivity = 0
         var proboscisActivity = 0
         var escapeActivity = 0
-        // Walk the engine's active set, not all neurons: only it can have a
-        // non-zero recent count, and the sweep was O(153,746) per observe().
-        for idx in core.engine.recentActiveNeurons {
-            guard core.engine.recentSpikes(of: idx) > 0 else { continue }
+        // Walk the firing active set, not all neurons: only it can have a
+        // non-zero rate, the sweep was O(153,746) per observe(), and the
+        // tumbling recent-spike window would report 0 for most of every window.
+        for idx in core.engine.firingActiveNeurons {
+            guard core.engine.rateHz(of: idx) > 0 else { continue }
             switch RegionID(rawValue: Int(core.connectome.neurons[Int(idx)].region)) ?? .unknown {
             case .legNeuromere: legActivity += 1
             case .wingNeuropil: wingActivity += 1

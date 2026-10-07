@@ -31,6 +31,8 @@ jobs:
         run: python tools/sync_test_asset.py --check
       - name: Neural engine offline mirror (parity with Swift)
         run: python tools/check_tests.py
+      - name: Time-scale gate (drive signal must be readable per step)
+        run: python tools/measure_time_scale.py
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py

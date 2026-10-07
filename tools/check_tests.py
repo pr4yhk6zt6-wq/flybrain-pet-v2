@@ -183,5 +183,85 @@ recent_ok = all(s.recent[i] > 0 for i in s.recentRing) and \
 check("testActiveSetsStayConsistent", ring_ok and recent_ok,
       f"refrRing={s.refractoryRing} recentRing={s.recentRing} refr={s.refr}")
 
+rate_ok = all(s.rate[i] > 0 for i in s.rateRing) and \
+    all(s.rate[i] == 0 for i in range(s.n) if i not in set(s.rateRing))
+check("testLeakyRateSetStaysConsistent", rate_ok,
+      f"rateRing={s.rateRing} rate={[round(x, 2) for x in s.rate]}")
+
+# --- the motor drive must be READABLE AT ANY INSTANT ---------------------
+# The motor readout used the tumbling `recent` window, which is cleared
+# wholesale when it rolls: the value depends on WHEN it is sampled, and reads
+# exactly 0 for most of every window. Worse, at the current neural clock
+# (0.1 ms/step, 4 steps per 60 Hz frame = ~42x slow motion) a 1 s neural
+# window is ~42 s of WALL time, so the fly could not change its leg drive in
+# under 40 s. The leaky rate is a real rate estimate instead.
+
+# (a) It must track the TRUE firing rate. A neuron spiking at a known rate
+#     must yield an estimate whose mean matches that rate — a tumbling counter
+#     sampled at an arbitrary instant would not. (Per-step it oscillates by
+#     design: a rate reconstructed from discrete spikes with tau=20 ms decays
+#     between spikes and jumps on each spike. The MEAN is the rate.)
+for (pulses, interval, label) in [(20, 50, "20 Hz"), (200, 5, "200 Hz")]:
+    rr = mk(2, 0.5, 100, 1.0, 5)
+    driveBurst(rr, 0, 1.0, pulses, interval, 400)
+    acc = 0.0
+    steps = 9000
+    for _ in range(steps):
+        rr.step()
+        acc += rr.rate[0]
+    mean_est = acc / steps
+    true_rate = rr.cum[0] / (rr.time / 1000.0)
+    check(f"testLeakyRateTracksTrueRate{label.split()[0]}",
+          true_rate > 0 and abs(mean_est - true_rate) / true_rate < 0.15,
+          f"true={true_rate:.1f} Hz mean_est={mean_est:.1f} Hz "
+          f"(ratio {mean_est / true_rate:.2f})")
+
+# (b) During sustained firing it must never read zero — the exact failure of
+#     the tumbling window, which was 0 at almost every instant checked.
+rr = mk(2, 0.5, 100, 1.0, 5)
+driveBurst(rr, 0, 1.0, 40, 25, 400)      # steady 40 Hz drive
+rr.run(3000)                              # let it settle
+lo = 1e9
+for _ in range(1000):                     # sample every step for 100 ms
+    rr.step()
+    lo = min(lo, rr.rate[0])
+check("testLeakyRateNeverReadsZeroWhileFiring", lo > 1.0,
+      f"min estimate={lo:.2f} Hz while firing steadily "
+      f"(a tumbling window reads 0 for most of every window)")
+
+# (c) It must fall fast when drive stops (sensorimotor timescale), not linger
+#     for the rest of a 1 s window. The burst spans ~1000 ms of neural time,
+#     which is 10000 steps — running only 3000 would still be mid-burst.
+r2 = mk(2, 0.5, 100, 1.0, 5)
+driveBurst(r2, 0, 1.0, 20, 50, 400)       # drive ends at ~1000 ms
+r2.run(11000)                             # t = 1100 ms: 100 ms after it ended
+rate_after = r2.rate[0]
+spikes_at = r2.cum[0]
+r2.run(1000)                              # another 100 ms with no drive at all
+quiet = (r2.cum[0] == spikes_at and r2.rate[0] < 1.0)
+check("testLeakyRateDecaysOnSensorimotorTimescale",
+      rate_after < 5.0 and quiet,
+      f"estimate {rate_after:.2f} Hz 100 ms after drive stopped, then "
+      f"{r2.rate[0]:.2f} Hz and no further spikes (tau={r2.motorRateTauMs:.0f} ms; "
+      f"a 1 s window would still report the whole count)")
+
+# (d) Snapshot/restore must carry the drive signal (it feeds the body, so
+#     losing it would make the restored motion differ from the original).
+r3 = mk(4, 0.5, 100, 1.0, 7)
+driveBurst(r3, 0, 1.0, 10, 30, 400)
+r3.run(500)
+live = round(r3.rate[0], 6)
+r4 = mk(4, 0.5, 100, 1.0, 7)
+r4.v, r4.w, r4.refr, r4.cum = copy.copy(r3.v), copy.copy(r3.w), copy.copy(r3.refr), copy.copy(r3.cum)
+r4.rate = list(r3.rate)
+r4.rngState, r4.time, r4.cumTotal, r4.seq = r3.rngState, r3.time, r3.cumTotal, r3.seq
+r4.heap = [ev for ev in r3.heap if ev[0] > r3.time]
+heapq.heapify(r4.heap)
+# the ring is derived data and must be rebuilt from the restored estimates
+r4.rateRing = [i for i, v in enumerate(r4.rate) if v > 0]
+check("testLeakyRateSurvivesSnapshot",
+      abs(r4.rate[0] - live) < 1e-6 and all(r4.rate[i] > 0 for i in r4.rateRing),
+      f"rate {live:.4f} Hz preserved across snapshot/restore and ring rebuilt")
+
 print()
 print("FAILED:", FAILS if FAILS else "none")

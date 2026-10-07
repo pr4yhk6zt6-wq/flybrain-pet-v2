@@ -87,8 +87,6 @@ final class WorldTests: XCTestCase {
     }
 
     func testSceneIntegratesIntoClosedLoop() {
-
-    func testSceneIntegratesIntoClosedLoop() {
         // This test used to assert only `engine.spikeCount > 0` and
         // `position.x >= 0`, against `regionalConnectome` — a fixture whose
         // chains are cut at every region boundary, so no excitation can leave

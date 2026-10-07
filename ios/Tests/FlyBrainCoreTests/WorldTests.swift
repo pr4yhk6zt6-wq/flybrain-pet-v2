@@ -50,9 +50,11 @@ final class WorldTests: XCTestCase {
     }
 
     func testDiagnoseLoopTransient() {
-        // TEMPORARY diagnostic: characterise the displacement curve so the
-        // control threshold is set from measurement, not assumption.
-        func run(connectome: Connectome, odorEmission: Float, steps: Int) -> Float {
+        // TEMPORARY diagnostic: is the measured displacement locomotion, or the
+        // body settling under gravity from its spawn pose? Splitting the run
+        // into a settle phase and a measurement phase answers that directly.
+        func run(connectome: Connectome, odorEmission: Float,
+                 settle: Int, steps: Int) -> (settled: Float, locomotion: Float) {
             let core = SimulationCore(connectome: connectome)
             let w = World()
             w.backgroundLuminance = 0
@@ -64,21 +66,27 @@ final class WorldTests: XCTestCase {
             }
             core.setScene(w)
             let start = core.position
+            core.run(steps: settle)
+            let settledPos = core.position
+            let settledDist = FlyMath.length(SIMD3<Float>((settledPos - start).x, 0, (settledPos - start).z))
             core.run(steps: steps)
-            let d = core.position - start
-            print("DIAG odour=\(odorEmission) steps=\(steps) "
+            let d = core.position - settledPos
+            let moved = FlyMath.length(SIMD3<Float>(d.x, 0, d.z))
+            print("DIAG odour=\(odorEmission) settle=\(settle) steps=\(steps) "
                   + "spikes=\(core.engine.spikeCount) "
-                  + "pos=\(core.position) moved=\(FlyMath.length(SIMD3<Float>(d.x, 0, d.z)))")
-            return FlyMath.length(SIMD3<Float>(d.x, 0, d.z))
+                  + "settledDist=\(settledDist) locomotion=\(moved)")
+            return (settledDist, moved)
         }
         let closed = TestSupport.closedLoopConnectome()
         let regional = TestSupport.regionalConnectome(neuronsPerRegion: 10)
-        for steps in [250, 500, 1000, 2000, 4000] {
-            _ = run(connectome: closed, odorEmission: 0, steps: steps)
-            _ = run(connectome: closed, odorEmission: 4, steps: steps)
-            _ = run(connectome: regional, odorEmission: 4, steps: steps)
+        for settle in [0, 500, 1000] {
+            _ = run(connectome: closed, odorEmission: 0, settle: settle, steps: 4000)
+            _ = run(connectome: closed, odorEmission: 4, settle: settle, steps: 4000)
+            _ = run(connectome: regional, odorEmission: 4, settle: settle, steps: 4000)
         }
     }
+
+    func testSceneIntegratesIntoClosedLoop() {
 
     func testSceneIntegratesIntoClosedLoop() {
         // This test used to assert only `engine.spikeCount > 0` and

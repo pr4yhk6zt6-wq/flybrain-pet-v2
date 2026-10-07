@@ -253,10 +253,12 @@ public final class VisionSystem: @unchecked Sendable {
         // collect candidate input neurons in the region (side-matched first)
         var candidates: [Int32] = []
         var fallback: Int32? = nil
-        for (idx, n) in connectome.neurons.enumerated() {
-            guard RegionID(rawValue: Int(n.region)) == region else { continue }
-            if n.side == event.side { candidates.append(Int32(idx)) }
-            if n.side == 0 && fallback == nil { fallback = Int32(idx) }
+        // Per-event region lookup (this runs for every ommatidium event, i.e.
+        // dozens of times per frame) — use the index, not a full scan.
+        for idx in connectome.neuronIndices(in: region) {
+            let n = connectome.neurons[Int(idx)]
+            if n.side == event.side { candidates.append(idx) }
+            if n.side == 0 && fallback == nil { fallback = idx }
         }
         if candidates.isEmpty, let f = fallback { candidates = [f] }
         guard !candidates.isEmpty else { return nil }

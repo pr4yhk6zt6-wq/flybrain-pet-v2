@@ -154,9 +154,12 @@ public final class SimulationCore: @unchecked Sendable {
         var drive = [Float](repeating: 0, count: 6)  // 6 legs
         var wing = 0
         var sez = 0
-        for (idx, n) in connectome.neurons.enumerated() {
-            let spk = Float(engine.recentSpikes(of: Int32(idx)))
+        // `recentSpikes > 0` is exactly the engine's recent active set, so walk
+        // that (O(active)) instead of scanning every neuron each step.
+        for idx in engine.recentActiveNeurons {
+            let spk = Float(engine.recentSpikes(of: idx))
             guard spk > 0 else { continue }
+            let n = connectome.neurons[Int(idx)]
             switch RegionID(rawValue: Int(n.region)) ?? .unknown {
             case .legNeuromere:
                 let slot = (n.side == 1 ? 0 : 1) * 3 + (Int(n.type) % 3)
@@ -312,14 +315,14 @@ public final class SimulationCore: @unchecked Sendable {
 
     /// Energetic cost of activity (0..1) — placeholder for body work.
     public var activityLevel: Float {
-        // healthy proxy: some neurons in leg/wing neuropils fired recently
-        let regions: [RegionID] = [.legNeuromere, .wingNeuropil]
+        // healthy proxy: some neurons in leg/wing neuropils fired recently.
+        // `recentSpikes > 0` is exactly what the engine's recent active set
+        // tracks, so walk that (O(active)) instead of scanning all neurons.
         var active = 0
-        for (idx, _) in connectome.neurons.enumerated() {
-            let r = RegionID(rawValue: Int(connectome.neurons[idx].region)) ?? .unknown
-            if regions.contains(r) && engine.recentSpikes(of: Int32(idx)) > 0 {
-                active += 1
-            }
+        for idx in engine.recentActiveNeurons {
+            guard engine.recentSpikes(of: idx) > 0 else { continue }
+            let r = RegionID(rawValue: Int(connectome.neurons[Int(idx)].region)) ?? .unknown
+            if r == .legNeuromere || r == .wingNeuropil { active += 1 }
         }
         return min(Float(active) / 8, 1)
     }
@@ -360,9 +363,11 @@ public final class BehaviorClassifier {
         var wingActivity = 0
         var proboscisActivity = 0
         var escapeActivity = 0
-        for (idx, _) in core.connectome.neurons.enumerated() {
-            guard core.engine.recentSpikes(of: Int32(idx)) > 0 else { continue }
-            switch RegionID(rawValue: Int(core.connectome.neurons[idx].region)) ?? .unknown {
+        // Walk the engine's active set, not all neurons: only it can have a
+        // non-zero recent count, and the sweep was O(153,746) per observe().
+        for idx in core.engine.recentActiveNeurons {
+            guard core.engine.recentSpikes(of: idx) > 0 else { continue }
+            switch RegionID(rawValue: Int(core.connectome.neurons[Int(idx)].region)) ?? .unknown {
             case .legNeuromere: legActivity += 1
             case .wingNeuropil: wingActivity += 1
             case .subesophagealZone: proboscisActivity += 1

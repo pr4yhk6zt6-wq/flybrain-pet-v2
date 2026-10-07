@@ -66,11 +66,14 @@ public struct SensoryInterface {
     public func inputNeuron(region: RegionID, side: UInt8,
                             transmitter: TransmitterType? = nil) -> Int32? {
         var fallback: Int32? = nil
-        for (idx, n) in connectome.neurons.enumerated() {
-            guard RegionID(rawValue: Int(n.region)) == region else { continue }
+        // Region lookup via the index rather than a scan of every neuron: this
+        // runs per sensory input request, and a whole-BANC connectome is
+        // 153,746 neurons.
+        for idx in connectome.neuronIndices(in: region) {
+            let n = connectome.neurons[Int(idx)]
             if let t = transmitter, n.transmitter != UInt8(t.rawValue) { continue }
-            if n.side == side { return Int32(idx) }
-            if n.side == 0 && fallback == nil { fallback = Int32(idx) }
+            if n.side == side { return idx }
+            if n.side == 0 && fallback == nil { fallback = idx }
         }
         if let f = fallback { return f }
         return nil

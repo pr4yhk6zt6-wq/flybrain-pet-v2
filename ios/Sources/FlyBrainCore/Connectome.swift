@@ -152,6 +152,31 @@ public final class Connectome: @unchecked Sendable {
     public let header: ConnectomeHeader
     public private(set) var neurons: [NeuronRecord] = []
     public private(set) var synapses: [SynapseRecord] = []
+
+    /// Neuron indices grouped by region, built on first use and invalidated on
+    /// append. Several call sites used to answer "which neurons are in this
+    /// region / is any of them active" by scanning all neurons: the vision
+    /// path does it PER ommatidium event (dozens per frame), the sensory path
+    /// per input request, and the behaviour/activity readouts once per frame
+    /// (three separate scans). On a whole-BANC connectome (153,746 neurons)
+    /// each scan is 153,746 reads, so an index turns them into a lookup.
+    private var regionIndex: [UInt8: [Int32]]? = nil
+
+    /// Indices of neurons in `region`, in ascending order. O(1) after the
+    /// first call; rebuilt automatically if neurons are appended.
+    public func neuronIndices(in region: RegionID) -> [Int32] {
+        if regionIndex == nil { buildRegionIndex() }
+        return regionIndex?[UInt8(region.rawValue)] ?? []
+    }
+
+    private func buildRegionIndex() {
+        var idx: [UInt8: [Int32]] = [:]
+        idx.reserveCapacity(24)
+        for i in 0..<neurons.count {
+            idx[neurons[i].region, default: []].append(Int32(i))
+        }
+        regionIndex = idx
+    }
     public private(set) var outgoingRanges: [OutEdgeRange] = []
     public private(set) var regionBounds: [RegionBounds] = []
 
@@ -176,6 +201,7 @@ public final class Connectome: @unchecked Sendable {
         guard indexByCanonicalID[n.canonicalID] == nil else { return false }
         indexByCanonicalID[n.canonicalID] = Int32(neurons.count)
         neurons.append(n)
+        regionIndex = nil   // the region grouping is now stale
         return true
     }
 
@@ -538,6 +564,7 @@ public final class Connectome: @unchecked Sendable {
 
         let c = Connectome(header: header)
         c.neurons = neurons
+        c.regionIndex = nil   // built lazily on first region query
         c.synapses = synapses
         c.outgoingRanges = ranges
         c.regionBounds = regions

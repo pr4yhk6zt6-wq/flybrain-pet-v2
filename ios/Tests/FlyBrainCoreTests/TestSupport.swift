@@ -123,7 +123,9 @@ extension TestSupport {
                 neurons.append(NeuronRecord(
                     canonicalID: Int32(pid),
                     datasetID: 0,
-                    type: UInt8(pid % 3),
+                    // `type` is UInt16 since v2 (the real release has 11,566
+                    // cell types, so a u8 vocabulary would alias them).
+                    type: UInt16(pid % 3),
                     region: UInt8(region.rawValue),
                     side: (region == .retinaLeft || region == .retinaRight) ? UInt8(region == .retinaLeft ? 1 : 2) : 0,
                     transmitter: UInt8(TransmitterType.cholinergic.rawValue),

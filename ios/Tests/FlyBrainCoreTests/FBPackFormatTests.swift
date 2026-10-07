@@ -37,6 +37,11 @@ final class FBPackFormatTests: XCTestCase {
             morphologyIndex: -1, incomingStart: 0, incomingCount: 0,
             outgoingStart: 0, outgoingCount: 0, x: 1.5, y: -2.5, z: 3.25)
         XCTAssertTrue(c.appendNeuron(n))
+        // The format stores exactly one CSR range per neuron (a neuron with no
+        // outgoing edges gets a zero range). The loader rejects an asset whose
+        // range count disagrees with neuronCount, so every writer must set
+        // them — including a one-neuron fixture like this one.
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0)])
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("roundtrip-\(UUID().uuidString).fbpack")
@@ -69,6 +74,7 @@ final class FBPackFormatTests: XCTestCase {
             transmitter: 0, provenance: 0, morphologyIndex: 0,
             incomingStart: 0, incomingCount: 0, outgoingStart: 0, outgoingCount: 0,
             x: 0, y: 0, z: 0)))
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0)])
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("layout-\(UUID().uuidString).fbpack")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -121,6 +127,7 @@ final class FBPackFormatTests: XCTestCase {
             transmitter: 0, provenance: 0, morphologyIndex: -1,
             incomingStart: 0, incomingCount: 0, outgoingStart: 0, outgoingCount: 0,
             x: 0, y: 0, z: 0)))
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0)])
         let bounds = [
             RegionBounds(region: 1, minX: -1, minY: -2, minZ: -3, maxX: 1, maxY: 2, maxZ: 3),
             RegionBounds(region: 5, minX: -10, minY: -20, minZ: -30, maxX: 10, maxY: 20, maxZ: 30),

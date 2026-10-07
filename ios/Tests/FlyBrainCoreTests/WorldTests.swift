@@ -49,6 +49,37 @@ final class WorldTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(low.y, 0)
     }
 
+    func testDiagnoseLoopTransient() {
+        // TEMPORARY diagnostic: characterise the displacement curve so the
+        // control threshold is set from measurement, not assumption.
+        func run(connectome: Connectome, odorEmission: Float, steps: Int) -> Float {
+            let core = SimulationCore(connectome: connectome)
+            let w = World()
+            w.backgroundLuminance = 0
+            w.ambientLight = 0
+            if odorEmission > 0 {
+                w.addOdorSource(OdorSource(position: SIMD3<Float>(0, 0.7, 0),
+                                           kind: .food, emissionRate: odorEmission,
+                                           diffusionConstant: 100))
+            }
+            core.setScene(w)
+            let start = core.position
+            core.run(steps: steps)
+            let d = core.position - start
+            print("DIAG odour=\(odorEmission) steps=\(steps) "
+                  + "spikes=\(core.engine.spikeCount) "
+                  + "pos=\(core.position) moved=\(FlyMath.length(SIMD3<Float>(d.x, 0, d.z)))")
+            return FlyMath.length(SIMD3<Float>(d.x, 0, d.z))
+        }
+        let closed = TestSupport.closedLoopConnectome()
+        let regional = TestSupport.regionalConnectome(neuronsPerRegion: 10)
+        for steps in [250, 500, 1000, 2000, 4000] {
+            _ = run(connectome: closed, odorEmission: 0, steps: steps)
+            _ = run(connectome: closed, odorEmission: 4, steps: steps)
+            _ = run(connectome: regional, odorEmission: 4, steps: steps)
+        }
+    }
+
     func testSceneIntegratesIntoClosedLoop() {
         // This test used to assert only `engine.spikeCount > 0` and
         // `position.x >= 0`, against `regionalConnectome` — a fixture whose

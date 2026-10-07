@@ -239,6 +239,12 @@ public struct BodyDynamics: Sendable {
     public var angularRateMagnitude: Float {
         FlyMath.length(body.angularVelocity) * (180 / .pi)
     }
+    /// SIGNED yaw rate about the world vertical (deg/s). The haltere organ
+    /// distinguishes left from right turns, so the stabilising pathway needs
+    /// the sign, not just the magnitude. Yaw axis is +y in this y-up world.
+    public var yawRateDegPerS: Float {
+        body.angularVelocity.y * (180 / .pi)
+    }
     /// Simulation time of the body clock (ms).
     public var simulationTimeMs: Float { elapsedMs }
     /// Body orientation as a quaternion (x, y, z, w) for rendering.

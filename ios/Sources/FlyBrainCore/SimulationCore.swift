@@ -284,10 +284,15 @@ public final class SimulationCore: @unchecked Sendable {
         // Haltere input is proportional to actual angular velocity and to the
         // Coriolis force the vibrating halteres experience while rotating —
         // this is the feedback that stabilises flight (spec #16).
-        let rate = dynamics.angularRateMagnitude        // deg/s
+        let rate = dynamics.angularRateMagnitude        // deg/s — magnitude only
         if rate > 1 {
-            let intensity = min(rate / 500, 1) * 0.5
-            for m in sensory.haltereInput(intensity: intensity) {
+            // The haltere organ reports a SIGNED rotation rate (left/right
+            // turns drive opposite sets of stabilising muscles), so the sign of
+            // the body's yaw rate is preserved and only the magnitude is
+            // normalised into the organ's operating range.
+            let signed = dynamics.yawRateDegPerS
+            let intensity = min(max(signed / 500, -1), 1)
+            for m in sensory.haltereInput(rotationRate: intensity) {
                 engine.injectCurrent(into: m.neuron, current: m.current,
                                      at: engine.currentTimeMs)
             }

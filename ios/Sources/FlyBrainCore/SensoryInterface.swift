@@ -141,4 +141,18 @@ public struct SensoryInterface {
         }
         return out
     }
+
+    /// Wing strain (campaniform sensilla at the wing base) driven by the real
+    /// stroke state: the sensilla report how hard the wing is being driven and
+    /// how much load the stroke is carrying. `intensity` is 0..1.
+    public func wingStrainInput(intensity: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let s = min(max(intensity, 0), 1)
+        guard s > 0 else { return out }
+        if let n = inputNeuron(region: .wingNeuropil, side: 0) {
+            out.append(SensoryInput(neuron: n, current: s * 20,
+                                    modality: .mechanosensation, strength: s))
+        }
+        return out
+    }
 }

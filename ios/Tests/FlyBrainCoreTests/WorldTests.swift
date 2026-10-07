@@ -50,17 +50,78 @@ final class WorldTests: XCTestCase {
     }
 
     func testSceneIntegratesIntoClosedLoop() {
-        let core = SimulationCore(connectome: TestSupport.regionalConnectome(neuronsPerRegion: 6))
-        let w = World()
-        w.addLight(LightSource(position: SIMD3<Float>(0, 4, 0), intensity: 1))
-        w.addOdorSource(OdorSource(position: SIMD3<Float>(2, 0, 0), kind: .food, emissionRate: 2, diffusionConstant: 3))
-        core.setScene(w)
-        core.run(steps: 300)
-        // The fly should have SOME neural activity through the closed loop
-        XCTAssertGreaterThan(core.engine.spikeCount, 0)
-        // and locomotion should move it through the scene (odour attracts via
-        // sensory loop — procedural, no scripted "approach food").
-        XCTAssertGreaterThanOrEqual(core.position.x, 0)
+        // This test used to assert only `engine.spikeCount > 0` and
+        // `position.x >= 0`, against `regionalConnectome` — a fixture whose
+        // chains are cut at every region boundary, so no excitation can leave
+        // the sensory region and the sensory->motor path does not exist in it.
+        // The position assertion was vacuous: the fly is spawned at x = 0, so
+        // it passed while asserting nothing at all about the loop.
+        //
+        // The claim is now checkable, and it is checked in BOTH directions,
+        // because a "loop" whose output does not depend on its input is not a
+        // loop:
+        //   odour + a connectome that reaches the motor pools  -> it walks
+        //   odour + a connectome that does not reach them      -> it does not
+        //   no odour + a connectome that does reach them       -> it does not
+        // The scene is left DARK (backgroundLuminance = 0, no lights): the
+        // world otherwise emits a photoreceptor event at every ommatidium on
+        // every step (lum = 0.46 > 0.02), which would drive the animal through
+        // the visual pathway and make the odour control meaningless.
+        func darkWorld(odorEmission: Float) -> World {
+            let w = World()
+            w.backgroundLuminance = 0
+            w.ambientLight = 0
+            if odorEmission > 0 {
+                // saturate the source at the antennae (concentration decays as
+                // exp(-d^2/2D)); dilution 100 keeps the falloff negligible.
+                w.addOdorSource(OdorSource(position: SIMD3<Float>(0, 0.7, 0),
+                                           kind: .food, emissionRate: odorEmission,
+                                           diffusionConstant: 100))
+            }
+            return w
+        }
+
+        func run(connectome: Connectome,
+                 odorEmission: Float,
+                 steps: Int) -> (moved: Float, spikes: UInt64) {
+            let core = SimulationCore(connectome: connectome)
+            core.setScene(darkWorld(odorEmission: odorEmission))
+            let start = core.position
+            core.run(steps: steps)
+            let d = core.position - start
+            return (FlyMath.length(SIMD3<Float>(d.x, 0, d.z)), core.engine.spikeCount)
+        }
+
+        let closed = TestSupport.closedLoopConnectome()
+        let regional = TestSupport.regionalConnectome(neuronsPerRegion: 10)
+
+        let short = run(connectome: closed, odorEmission: 4, steps: 1500)
+        let long = run(connectome: closed, odorEmission: 4, steps: 4000)
+
+        // The arc carries excitation through the connectome and displaces the
+        // animal, increasingly so as the loop keeps running.
+        XCTAssertGreaterThan(short.spikes, 0)
+        XCTAssertGreaterThan(short.moved, 0.05,
+                             "odour must move the fly through the sensory->motor loop")
+        XCTAssertGreaterThan(long.moved, short.moved,
+                             "displacement must grow with time, not stall")
+
+        // Control 1 — same connectome, odour removed. The ONLY difference is the
+        // sensory input, so any motion here would come from something other than
+        // the loop.
+        let noOdor = run(connectome: closed, odorEmission: 0, steps: 4000)
+        XCTAssertLessThan(noOdor.moved, 0.01,
+                          "the fly moved \(noOdor.moved) mm with no odour in the scene")
+
+        // Control 2 — same odour, connectome with no path out of the sensory
+        // region. Sensory neurons still fire (so `spikeCount > 0` is satisfied),
+        // but nothing reaches the motor pools, so the animal cannot move. This
+        // is precisely what the old assertion could not distinguish.
+        let cutPath = run(connectome: regional, odorEmission: 4, steps: 4000)
+        XCTAssertGreaterThan(cutPath.spikes, 0)
+        XCTAssertLessThan(cutPath.moved, 0.01,
+                          "the fly moved \(cutPath.moved) mm even though its connectome "
+                          + "has no path from the sensory region to the motor pools")
     }
 
     func testWorldRemovesOdorSources() {

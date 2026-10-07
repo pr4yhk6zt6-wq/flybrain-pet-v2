@@ -25,6 +25,26 @@ biology.
 | Neuromodulation | APPROXIMATED (dopamine gate; octopamine etc. future) |
 | Plasticity | RESEARCH-grade; OFF by default; never rewrites connectome unless explicitly enabled |
 
+## Time scale (not real time)
+
+- **The simulation runs ~42× slower than real time.** `parameters.dt` is 0.1 ms
+  of neural time and the app advances 4 steps per 60 Hz frame, so 0.4 ms of
+  neural time elapses per 16.7 ms of wall time (`tools/measure_time_scale.py`,
+  gated in CI). One second of neural time takes ~42 s of real time.
+- **Consequence for any windowed neural signal:** the 1 s recent-spike counter
+  takes ~42 s of wall time to roll. It is therefore an *inspection* signal only.
+  Everything that drives the body samples the leaky firing-rate estimate
+  (`rateHz`), whose time constant is 20 ms of neural time ≈ 0.83 s of real time.
+  Neither is a real-time sensorimotor loop; the fly does not move at fly speed.
+- **Why it is not simply made faster:** at 0.1 ms per step, reproducing the
+  ~0.8 ms between two spiking neurons at true speed would need ~8,000 steps per
+  frame on an A13. A faster (larger) `dt` would change the integration
+  accuracy, so the clock is deliberately slow rather than coarse.
+- **Motor drive fidelity is INFERRED throughout:** the leg/wing rate reference
+  (`motorDriveReferenceHz = 100`) and the 20 ms rate constant are engineering
+  choices matched to a documented insect sensorimotor range, not measurements
+  from this connectome.
+
 ## Sensory systems
 
 | System | Structural fidelity | Physiological fidelity |

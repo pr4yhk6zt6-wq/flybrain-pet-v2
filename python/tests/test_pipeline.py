@@ -5,13 +5,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from flybrain.pack import _region_bytes, pack
+from flybrain.pack import (NEURON_STRIDE, _region_bytes, _source_id_bytes,
+                           pack, parse_fbpack)
 from flybrain.pid import (
+    NeuronRecord,
     Provenance,
     RegionBounds,
     RegionID,
     TransmitterType,
     build_synthetic_demo,
+    SYNTHETIC_SOURCE_BASE,
 )
 from flybrain.validate import validate_dataset
 
@@ -46,6 +49,10 @@ def test_neuron_record_layout_44_bytes():
     nbytes = int.from_bytes(blob[off:off + 8], "little")
     assert nbytes % 44 == 0
     assert nbytes // 44 == len(data["neurons"])
+    # v3 did NOT widen the neuron record — the original IDs went into their own
+    # trailing block instead (the record was already exactly 44 bytes of used
+    # space). Pin that, so a later change cannot quietly move every field.
+    assert NEURON_STRIDE == 44
 
 
 def test_provenance_all_neurons_inferred_never_measured():

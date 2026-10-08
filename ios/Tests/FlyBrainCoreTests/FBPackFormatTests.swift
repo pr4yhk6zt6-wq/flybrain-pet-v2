@@ -15,7 +15,7 @@ final class FBPackFormatTests: XCTestCase {
 
     private func makeHeader(neurons: Int32, synapses: Int32, regions: Int32) -> ConnectomeHeader {
         ConnectomeHeader(
-            magic: 0x46425031, version: 2, flags: 0,
+            magic: 0x46425031, version: 3, flags: 0,
             neuronCount: neurons, synapseCount: synapses,
             morphologyCount: 0, regionCount: regions,
             organism: OrganismInfo(datasetVersion: "test", simulatorVersion: "test",
@@ -182,5 +182,113 @@ final class FBPackFormatTests: XCTestCase {
         let back = try Connectome.loadFBPack(from: url)
         XCTAssertEqual(back.validateCSR(), [])
         XCTAssertEqual(back.validate(), [])
+    }
+
+    // MARK: - v3 original dataset IDs (docs/TRACEABILITY.md)
+
+    /// The whole point of the block: a selected neuron can name the cell it
+    /// came from, and the value survives the round trip even though it does not
+    /// fit the i32 canonicalID slot.
+    func testSourceIDsSurviveRoundTripAndExceedInt32() throws {
+        let c = Connectome(header: makeHeader(neurons: 3, synapses: 0, regions: 1))
+        for i in 0..<3 {
+            XCTAssertTrue(c.appendNeuron(NeuronRecord(
+                canonicalID: Int32(i), datasetID: 0, type: 0, region: 9, side: 0,
+                transmitter: 0, provenance: 0, morphologyIndex: -1,
+                incomingStart: 0, incomingCount: 0, outgoingStart: 0, outgoingCount: 0,
+                x: 0, y: 0, z: 0)))
+        }
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0),
+                             OutEdgeRange(start: 0, count: 0),
+                             OutEdgeRange(start: 0, count: 0)])
+        // Shaped like the real BANC Root IDs (measured min 720575940381905254):
+        // 60-bit, and deliberately NOT the array index — the defect being fixed
+        // was that the two were the same number, which made every value look
+        // plausible.
+        let ids: [UInt64] = [720575940381905254, 720575940381905999, 720575941734593579]
+        c.setSourceIDs(ids)
+        XCTAssertTrue(c.validate().isEmpty, "\(c.validate())")
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("srcid-\(UUID().uuidString).fbpack")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try c.writeFBPack(to: url)
+        let back = try Connectome.loadFBPack(from: url)
+        XCTAssertTrue(back.recordsSourceIDs)
+        for (i, want) in ids.enumerated() {
+            XCTAssertEqual(back.sourceID(of: i), want, "neuron \(i)")
+        }
+        XCTAssertGreaterThan(back.sourceID(of: 0)!, UInt64(Int32.max),
+                             "the value must exceed int32 or the test proves nothing")
+    }
+
+    /// An asset that has no original IDs must say so, and must NOT write a
+    /// block of zeros: 0 is a legal ID, so a reader would answer confidently
+    /// about the wrong neuron instead of reporting that it cannot trace.
+    func testAssetWithoutSourceIDsRecordsNone() throws {
+        let c = Connectome(header: makeHeader(neurons: 2, synapses: 0, regions: 1))
+        for i in 0..<2 {
+            XCTAssertTrue(c.appendNeuron(NeuronRecord(
+                canonicalID: Int32(i), datasetID: 0, type: 0, region: 9, side: 0,
+                transmitter: 0, provenance: 0, morphologyIndex: -1,
+                incomingStart: 0, incomingCount: 0, outgoingStart: 0, outgoingCount: 0,
+                x: 0, y: 0, z: 0)))
+        }
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0),
+                             OutEdgeRange(start: 0, count: 0)])
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nosrcid-\(UUID().uuidString).fbpack")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try c.writeFBPack(to: url)
+        let back = try Connectome.loadFBPack(from: url)
+        XCTAssertFalse(back.recordsSourceIDs)
+        XCTAssertTrue(back.sourceIDs.isEmpty)
+        XCTAssertNil(back.sourceID(of: 0), "unknown must be nil, not 0")
+    }
+
+    /// Two neurons sharing a source ID means one of them resolves to the wrong
+    /// cell in the release — worse than having no IDs at all, so it is a
+    /// validation failure rather than a warning.
+    func testDuplicateSourceIDsAreRejected() {
+        let c = Connectome(header: makeHeader(neurons: 2, synapses: 0, regions: 1))
+        for i in 0..<2 {
+            _ = c.appendNeuron(NeuronRecord(
+                canonicalID: Int32(i), datasetID: 0, type: 0, region: 9, side: 0,
+                transmitter: 0, provenance: 0, morphologyIndex: -1,
+                incomingStart: 0, incomingCount: 0, outgoingStart: 0, outgoingCount: 0,
+                x: 0, y: 0, z: 0))
+        }
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0),
+                             OutEdgeRange(start: 0, count: 0)])
+        c.setSourceIDs([42, 42])
+        XCTAssertTrue(c.validate().contains { $0.contains("duplicates") }, "\(c.validate())")
+    }
+
+    /// A v2 file has no ID block, so it is rejected rather than read with the
+    /// block silently absent (the loader would otherwise accept a layout that
+    /// the writer no longer produces).
+    func testVersion2AssetIsRejected() throws {
+        // Built directly with a v2 header: `header` is immutable, and the point
+        // is to write a file whose HEADER says 2 while the layout is v3 — the
+        // loader must reject it rather than read one layout as the other.
+        var hdr = makeHeader(neurons: 1, synapses: 0, regions: 1)
+        hdr.version = 2
+        let c = Connectome(header: hdr)
+        _ = c.appendNeuron(NeuronRecord(
+            canonicalID: 0, datasetID: 0, type: 0, region: 9, side: 0,
+            transmitter: 0, provenance: 0, morphologyIndex: -1,
+            incomingStart: 0, incomingCount: 0, outgoingStart: 0, outgoingCount: 0,
+            x: 0, y: 0, z: 0))
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0)])
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("v2-\(UUID().uuidString).fbpack")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try c.writeFBPack(to: url)
+        XCTAssertThrowsError(try Connectome.loadFBPack(from: url)) { err in
+            guard case ConnectomeError.unsupportedVersion(let v) = err else {
+                return XCTFail("expected unsupportedVersion, got \(err)")
+            }
+            XCTAssertEqual(v, 2)
+        }
     }
 }

@@ -304,6 +304,13 @@ def _write_banc_asset(out_path: Path, *, header: ConnectomeHeader,
     header.generatedBy = generated_by
     header.generationDate = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+    # v3: the original release IDs go in their own u64 block. The header flag
+    # is set from the same helper that produces the bytes, and the header is
+    # serialised after it, so the two cannot disagree about whether a block
+    # follows the region block.
+    source_blob, has_source_ids = pack._source_id_bytes(neurons)
+    header.hasSourceIDs = has_source_ids
+
     hdr = json.dumps(header.to_json_dict(), separators=(",", ":")).encode("utf-8")
     hdr += b"\x00" * ((-len(hdr)) % 16)
 
@@ -325,7 +332,15 @@ def _write_banc_asset(out_path: Path, *, header: ConnectomeHeader,
             buf += _struct.pack(
                 "<iBBBBBBHiiiii3f",
                 n.canonicalID, n.datasetID, n.region, n.side,
-                n.transmitter, n.provenance, 0, n.type,
+                n.transmitter, n.provenance,
+                # NOT a literal 0: `n.flags` carries the release's own
+                # `Super Class` (motor/sensory) and is what lets the runtime
+                # motor readout avoid summing the sensory afferents that share
+                # the leg neuromere. Writing 0 here discarded the label at the
+                # last step — the ingest computed it and the serialiser dropped
+                # it, so the asset shipped with every neuron classless and the
+                # shipped-asset gate had nothing to find.
+                n.flags, n.type,
                 n.morphologyIndex, n.incomingStart, n.incomingCount,
                 n.outgoingStart, n.outgoingCount,
                 n.x, n.y, n.z)
@@ -363,6 +378,12 @@ def _write_banc_asset(out_path: Path, *, header: ConnectomeHeader,
             buf += _struct.pack("<B3x6f", r.region, r.minX, r.minY, r.minZ,
                                 r.maxX, r.maxY, r.maxZ)
         fh.write(buf)
+
+        # v3: original dataset IDs, one u64 per neuron in array order. Written
+        # as a length-prefixed block like the others, so a pre-v3 reader that
+        # stops after the region block sees a shorter (not mis-parsed) file.
+        fh.write(struct.pack("<Q", len(source_blob)))
+        fh.write(source_blob)
 
     tmp.replace(out_path)
     return out_path.stat().st_size
@@ -496,6 +517,11 @@ def build_banc_asset(data_dir: Path,
         type_index = type_ids.setdefault(ctype, len(type_ids))
         neurons.append(NeuronRecord(
             canonicalID=len(neurons),
+            # v3: the release's own 64-bit Root ID, which is what makes a
+            # neuron traceable back to BANC (golden rule #1 / spec #4, #120).
+            # It is a SEPARATE field from canonicalID: that one is the dense
+            # simulator index and is what SynapseRecord endpoints number.
+            sourceID=rid,
             datasetID=int(DatasetID.BANC),
             type=type_index,
             region=region,
@@ -643,7 +669,7 @@ def build_banc_asset(data_dir: Path,
 
     header = ConnectomeHeader(
         magic=0x46425031,
-        version=2,          # v2 widened the cell-type field from u8 to u16
+        version=3,          # v3 added the per-neuron original-ID block
         flags=0,                     # reserved in the format; no reader reads it
         neuronCount=len(neurons),
         synapseCount=len(ordered) // 3,

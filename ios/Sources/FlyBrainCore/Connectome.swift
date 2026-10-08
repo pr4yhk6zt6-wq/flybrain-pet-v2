@@ -13,7 +13,15 @@ import Foundation
 
 /// Compact neuron record. 64 bytes on x86_64, 56 on arm64.
 public struct NeuronRecord {
-    public var canonicalID: Int32      // stable ID across datasets (index = position in array)
+    /// DENSE SIMULATOR INDEX: this neuron's position in `Connectome.neurons`,
+    /// and the numbering `SynapseRecord.preNeuron/postNeuron` use.
+    ///
+    /// It is deliberately NOT the source dataset's own ID. The release's IDs do
+    /// not fit here — BANC Root IDs are 60-bit (measured min
+    /// 720575940381905254) — so they live in the separate `Connectome.sourceIDs`
+    /// block and are reached through `Connectome.sourceID(of:)`. Printing this
+    /// field as "the neuron's ID" would name an array subscript.
+    public var canonicalID: Int32
     public var datasetID: UInt8        // DatasetID raw
     public var type: UInt16            // CellType raw (u16: the real BANC
                                        // release has 11,566 distinct cell
@@ -125,6 +133,11 @@ public struct ConnectomeHeader: Codable {
     public var synapseCount: Int32
     public var morphologyCount: Int32
     public var regionCount: Int32
+    /// v3: is the trailing per-neuron original-ID block meaningful? Optional
+    /// on the wire — a v1/v2 asset has no such key, and a non-optional Bool
+    /// would make `JSONDecoder` reject every older file outright. Read it
+    /// through `recordsSourceIDs`.
+    public var hasSourceIDs: Bool?
     public var organism: OrganismInfo
     public var sourceDatasets: [String]
     public var dataProvenance: String
@@ -132,11 +145,15 @@ public struct ConnectomeHeader: Codable {
     public var generatedBy: String
     public var description: String
 
-    public init(magic: UInt32, version: UInt32 = 2, flags: UInt32 = 0,
+    /// Whether the file is expected to carry the original-ID block.
+    public var recordsSourceIDs: Bool { hasSourceIDs ?? false }
+
+    public init(magic: UInt32, version: UInt32 = 3, flags: UInt32 = 0,
                 neuronCount: Int32, synapseCount: Int32, morphologyCount: Int32,
                 regionCount: Int32, organism: OrganismInfo,
                 sourceDatasets: [String], dataProvenance: String,
-                generationDate: String, generatedBy: String, description: String) {
+                generationDate: String, generatedBy: String, description: String,
+                hasSourceIDs: Bool? = false) {
         self.magic = magic
         self.version = version
         self.flags = flags
@@ -150,6 +167,7 @@ public struct ConnectomeHeader: Codable {
         self.generationDate = generationDate
         self.generatedBy = generatedBy
         self.description = description
+        self.hasSourceIDs = hasSourceIDs
     }
 }
 
@@ -225,6 +243,24 @@ public final class Connectome: @unchecked Sendable {
     /// Convenience lookup: neuron index by canonicalID (built once).
     public private(set) var indexByCanonicalID: [Int32: Int32] = [:]
 
+    /// Original dataset IDs, one per neuron in array order (v3). EMPTY when the
+    /// asset does not record them — which is a different statement from "the ID
+    /// is zero", so it is represented as absence rather than a zero-filled
+    /// array. Golden rule #1 / spec #4, #120: this is what lets a selected
+    /// neuron be traced back to the release it came from.
+    public private(set) var sourceIDs: [UInt64] = []
+
+    /// The source dataset's own ID for neuron index `i`, or nil when the asset
+    /// does not record original IDs. Nil rather than 0 so a caller cannot
+    /// accidentally present "unknown" as a real ID.
+    public func sourceID(of index: Int) -> UInt64? {
+        guard index >= 0, index < sourceIDs.count else { return nil }
+        return sourceIDs[index]
+    }
+
+    /// Whether this asset can trace its neurons back to their release.
+    public var recordsSourceIDs: Bool { sourceIDs.count == neurons.count && !sourceIDs.isEmpty }
+
     public init(header: ConnectomeHeader) {
         self.header = header
     }
@@ -252,6 +288,11 @@ public final class Connectome: @unchecked Sendable {
 
     public func setOutgoingRanges(_ r: [OutEdgeRange]) { outgoingRanges = r }
 
+    /// Attach original dataset IDs (v3). Must be one per neuron, in array
+    /// order; the writer refuses a partial set, so `writeFBPack` records the
+    /// header flag as false if this is never called.
+    public func setSourceIDs(_ ids: [UInt64]) { sourceIDs = ids }
+
     /// Post-build validation (spec #90): duplicate IDs, orphan edges, invalid indexes.
     /// Returns list of problems; caller decides severity.
     public func validate() -> [String] {
@@ -275,6 +316,17 @@ public final class Connectome: @unchecked Sendable {
             if syn.confidence > 100 { problems.append("synapse \(i): confidence > 100") }
         }
         if outgoingRanges.count != n { problems.append("outgoingRanges count mismatch") }
+        // Original IDs must be one per neuron, in array order, and DISTINCT:
+        // traceability depends on the mapping being a bijection. Two neurons
+        // sharing a source ID means one of them resolves to the wrong cell in
+        // the release, which is worse than having no IDs at all.
+        if !sourceIDs.isEmpty {
+            if sourceIDs.count != n {
+                problems.append("sourceIDs count \(sourceIDs.count) != neurons \(n)")
+            } else if Set(sourceIDs).count != n {
+                problems.append("sourceIDs contain duplicates")
+            }
+        }
         // Each edge must be listed by exactly its own presynaptic neuron. Ranges
         // built before the synapse array is filled (or a stale index) silently
         // make neurons non-partitioning: two neurons then emit the same edge,
@@ -454,6 +506,13 @@ public final class Connectome: @unchecked Sendable {
         header.neuronCount = Int32(neurons.count)
         header.synapseCount = Int32(synapses.count)
         header.regionCount = Int32(regionBounds.count)
+        // The original-ID block is written only when every neuron has one, and
+        // the header is encoded BELOW, so the decision has to be made here —
+        // encoding first and appending later would ship a header whose flag
+        // contradicts the blocks that follow it.
+        let sid = sourceIDs
+        let completeSourceIDs = !sid.isEmpty && sid.count == neurons.count
+        header.hasSourceIDs = completeSourceIDs
 
         let enc = JSONEncoder()
         var hdrData = try enc.encode(header)
@@ -476,6 +535,17 @@ public final class Connectome: @unchecked Sendable {
         var rd = Data(capacity: regionBounds.count * 28)
         regionBounds.forEach { appendRegionRecord($0, to: &rd) }
         appendU64(UInt64(rd.count), to: &data); data.append(rd)
+
+        // v3: original dataset IDs. Only written when EVERY neuron has one, so
+        // the block is never a mix of real IDs and padding zeros — a reader
+        // that treated a placeholder 0 as an ID would resolve the wrong neuron.
+        if completeSourceIDs {
+            var id = Data(capacity: sid.count * 8)
+            for v in sid { appendU64(v, to: &id) }
+            appendU64(UInt64(id.count), to: &data); data.append(id)
+        } else {
+            appendU64(0, to: &data)
+        }
 
         try data.write(to: url, options: .atomic)
     }
@@ -510,10 +580,10 @@ public final class Connectome: @unchecked Sendable {
         while hdrClean.last == 0 { hdrClean.removeLast() }
         let header = try JSONDecoder().decode(ConnectomeHeader.self, from: hdrClean)
         guard header.magic == 0x46425031 else { throw ConnectomeError.badMagic }
-        // v2 widened NeuronRecord.type from u8 to u16. A v1 asset would be
-        // parsed with every neuron taking its region byte as the cell type, so
-        // it is rejected instead of silently misread.
-        guard header.version == 2 else { throw ConnectomeError.unsupportedVersion(header.version) }
+        // v2 widened NeuronRecord.type from u8 to u16; v3 appended the
+        // original-ID block. Each version changed the layout, so an older file
+        // is rejected rather than misread.
+        guard header.version == 3 else { throw ConnectomeError.unsupportedVersion(header.version) }
 
         // Neurons
         let neuronData = try readBlockBytes()
@@ -610,12 +680,46 @@ public final class Connectome: @unchecked Sendable {
             throw ConnectomeError.corrupt("outgoing range count mismatch")
         }
 
+        // v3: original dataset IDs (u64 per neuron). The header's flag says
+        // whether the block is meaningful; a header that claims IDs but does
+        // not carry one per neuron is corrupt, not merely empty, because the
+        // two answers ("this asset is traceable" / "it is not") drive what the
+        // app may claim about a selected cell.
+        var srcIDs: [UInt64] = []
+        let sourceData = try readBlockBytes()
+        if header.recordsSourceIDs {
+            guard sourceData.count % 8 == 0 else {
+                throw ConnectomeError.corrupt("sourceID block alignment")
+            }
+            guard sourceData.count == neurons.count * 8 else {
+                throw ConnectomeError.corrupt(
+                    "sourceID block has \(sourceData.count / 8) ids for "
+                    + "\(neurons.count) neurons")
+            }
+            srcIDs.reserveCapacity(neurons.count)
+            var sidOff = 0
+            while sidOff + 8 <= sourceData.count {
+                let v = sourceData.subdata(in: sidOff..<(sidOff + 8))
+                    .withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+                srcIDs.append(UInt64(littleEndian: v))
+                sidOff += 8
+            }
+        } else if sourceData.count != 0 {
+            // The header says false but a block follows: the file contradicts
+            // itself, and silently ignoring the IDs would lose the traceability
+            // the block exists to provide.
+            throw ConnectomeError.corrupt(
+                "sourceID block present (\(sourceData.count) bytes) but "
+                + "header.hasSourceIDs is false")
+        }
+
         let c = Connectome(header: header)
         c.neurons = neurons
         c.regionIndex = nil   // built lazily on first region query
         c.synapses = synapses
         c.outgoingRanges = ranges
         c.regionBounds = regions
+        c.sourceIDs = srcIDs
         for (i, n) in neurons.enumerated() {
             c.indexByCanonicalID[n.canonicalID] = Int32(i)
         }

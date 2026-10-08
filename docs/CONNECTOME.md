@@ -15,6 +15,16 @@ Every neuron keeps: original dataset, original neuron ID, canonical ID, cell typ
 hemisphere, neuropil, body part, transmitter, confidence, source dataset,
 morphology source, partner references (spec #5). Never merge graph IDs blindly.
 
+> **"Original neuron ID" was not actually kept until format v3.** The field that
+> looked like it held the ID — `NeuronRecord.canonicalID` — was filled with the
+> neuron's **array index** by both writers, while this line claimed the release's
+> own ID was preserved. The BANC release's `Root ID`s are 60-bit
+> (measured min `720575940381905254`) and cannot fit that i32 slot, so the
+> original IDs were being read and then discarded. v3 appends a `u64` per neuron
+> in a separate block; `canonicalID` is now explicitly documented as the dense
+> simulator index. See `TRACEABILITY.md` for the measurement and the fix.
+> `tools/verify_traceability.py` is the gate.
+
 ## Data model
 
 Packed binary `.fbpack` (see `ARCHITECTURE.md`):
@@ -24,7 +34,13 @@ NeuronRecord (44 B)   canonicalID, datasetID, type, region, side, transmitter,
                       provenance, morphologyIndex, CSR in/out ranges, x,y,z
 SynapseRecord (20 B)  pre, post, synapseCount, transmitter, sign, confidence,
                       delaySteps, estimatedEfficacy (INFERRED)
+sourceIDBlock (8 B/neuron, v3)  original dataset ID (u64), array order
 ```
+
+`canonicalID` is the dense simulator index (the array position, and the
+numbering synapse endpoints use) — NOT the source dataset's ID. The original ID
+is `sourceIDBlock[i]`, present only when `header.hasSourceIDs` is true; an
+unidentified neuron is never written as 0, because 0 is a legal ID.
 
 Provenance classes: `MEASURED / RECONSTRUCTED / INFERRED / PREDICTED / APPROXIMATED / UNKNOWN`.
 

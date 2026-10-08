@@ -105,14 +105,27 @@ class NeuronRecord:
         "canonicalID", "datasetID", "type", "region", "side",
         "transmitter", "provenance", "morphologyIndex",
         "incomingStart", "incomingCount", "outgoingStart", "outgoingCount",
-        "x", "y", "z", "flags",
+        "x", "y", "z", "flags", "sourceID",
     )
+
+    #: Sentinel for "this neuron's original dataset ID is not known".
+    #: 0 is a legal ID in principle, so absence must be its own value rather
+    #: than a magic number that a real ID could collide with. The wire keeps it
+    #: out of the neuron record entirely (it has no room) and writes a separate
+    #: u64 block; NO_SOURCE_ID is written as 0 there with the header flag
+    #: `hasSourceIDs` telling the reader whether the block means anything.
+    NO_SOURCE_ID = -1
 
     def __init__(self, canonicalID, datasetID, type, region, side,
                  transmitter, provenance, morphologyIndex,
                  incomingStart, incomingCount, outgoingStart, outgoingCount,
-                 x, y, z, flags=0):
+                 x, y, z, flags=0, sourceID=NO_SOURCE_ID):
+        # `canonicalID` is the DENSE SIMULATOR INDEX: it equals this neuron's
+        # position in the kept array, and it is the numbering that
+        # SynapseRecord.preNeuron/postNeuron refer to. It is deliberately not
+        # the release's ID — that is `sourceID` (see docs/TRACEABILITY.md).
         self.canonicalID = int(canonicalID)
+        self.sourceID = int(sourceID)
         self.datasetID = int(datasetID)
         self.type = int(type)
         self.region = int(region)
@@ -170,7 +183,8 @@ class ConnectomeHeader:
 
     def __init__(self, *, magic, version, flags, neuronCount, synapseCount,
                  morphologyCount, regionCount, organism, sourceDatasets,
-                 dataProvenance, generationDate, generatedBy, description):
+                 dataProvenance, generationDate, generatedBy, description,
+                 hasSourceIDs=False):
         self.magic = magic
         self.version = version
         self.flags = flags
@@ -184,6 +198,10 @@ class ConnectomeHeader:
         self.generationDate = generationDate
         self.generatedBy = generatedBy
         self.description = description
+        # v3: is the trailing u64-per-neuron block meaningful? A zero-length
+        # block and "an asset that records ID 0 for every neuron" are different
+        # statements and must not be conflated (docs/TRACEABILITY.md).
+        self.hasSourceIDs = bool(hasSourceIDs)
 
     def to_json_dict(self):
         return {
@@ -205,6 +223,9 @@ class ConnectomeHeader:
             "generationDate": self.generationDate,
             "generatedBy": self.generatedBy,
             "description": self.description,
+            # v3. Optional on read: a v1/v2 header has no such key and the Swift
+            # decoder treats a missing Bool as false.
+            "hasSourceIDs": bool(getattr(self, "hasSourceIDs", False)),
         }
 
 
@@ -221,6 +242,15 @@ class ConnectomeHeader:
 # SEZ → VNC → leg neuromeres; wing/haltere neuropils; endocrine visceral.
 # Left/right hemispheres (side 1/2). All connections are labeled INFERRED,
 # because the synthetic graph is an engineering stand-in, never measured.
+
+# Source IDs for the demo neurons. Chosen so a demo ID can never be mistaken
+# for a dense simulator index: 0x53 is ASCII 'S' in the top byte, so
+# 0x5300000000000000+i reads as "synthetic, index i" at a glance, and any tool
+# that prints a demo ID next to a BANC ID (0x0A...) can tell them apart. The
+# values are also far above int32, so a decoder still reading the ID out of the
+# i32 canonicalID slot produces an obviously wrong number rather than a
+# plausible-looking one.
+SYNTHETIC_SOURCE_BASE = 0x5300000000000000
 
 def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
     import random
@@ -323,6 +353,7 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
         for i in range(neurons_per_region):
             neurons.append(NeuronRecord(
                 canonicalID=neuron_id,
+                sourceID=SYNTHETIC_SOURCE_BASE + neuron_id,
                 datasetID=DatasetID.SYNTHETIC,
                 type=1,  # generic interneuron; motor types refined later
                 region=int(region),
@@ -400,7 +431,7 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
 
     header = ConnectomeHeader(
         magic=0x46425031,
-        version=2,          # v2 widened the cell-type field from u8 to u16
+        version=3,          # v3 added the per-neuron original-ID block
         flags=0,
         neuronCount=neuron_id,
         synapseCount=len(synapse_list),
@@ -420,6 +451,7 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
         generatedBy="flybrain/pack.py (synthetic demo)",
         description=("Synthetic stand-in connectome for pipeline validation. "
                      "NOT biological data. Adult female Drosophila default organism."),
+        hasSourceIDs=True,
     )
 
     return {

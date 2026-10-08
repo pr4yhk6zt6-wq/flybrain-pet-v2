@@ -25,6 +25,7 @@ NEURON_STRIDE = 44
 SYNAPSE_STRIDE = 20
 RANGE_STRIDE = 8
 REGION_STRIDE = 28
+SOURCE_ID_STRIDE = 8     # v3
 
 
 def read_header(blob: bytes) -> tuple[dict, int]:
@@ -34,10 +35,15 @@ def read_header(blob: bytes) -> tuple[dict, int]:
 
 
 def read_block_lens(blob: bytes, hlen: int) -> dict[str, tuple[int, int]]:
-    """{name: (length, offset-of-payload)} for the four blocks after the header."""
+    """{name: (length, offset-of-payload)} for the blocks after the header.
+
+    The sourceID block is walked as well, even though this tool does not change
+    it: a header rewrite stops when the four data blocks have been copied, so
+    leaving the fifth out of the list would DROP it from the rewritten file.
+    """
     out = {}
     off = 8 + hlen
-    for name in ("neuron", "synapse", "range", "region"):
+    for name in ("neuron", "synapse", "range", "region", "sourceID"):
         (ln,) = struct.unpack_from("<Q", blob, off)
         out[name] = (ln, off + 8)
         off += 8 + ln
@@ -54,6 +60,12 @@ def rewrite(path: Path, *, apply: bool) -> int:
     # Swift decodes this as String; the old file carried the IntEnum raw value.
     fixed = "RECONSTRUCTED" if before in (1, "1", "RECONSTRUCTED") else str(before)
     print(f"{path.name}: dataProvenance {before!r} -> {fixed!r}")
+    # This tool rewrites the header ONLY; it cannot add or drop a data block. So
+    # it must not be used to re-label a file as a different format version —
+    # claiming v3 while the file still ends at the region block would make the
+    # loader expect an ID block that is not there.
+    print(f"  version: {hdr.get('version')} "
+          f"(this tool does not change the layout, only header fields)")
 
     # ---- sanity: block sizes must agree with the header counts -------------
     checks = [
@@ -61,6 +73,12 @@ def rewrite(path: Path, *, apply: bool) -> int:
         ("synapse", blocks["synapse"][0], hdr["synapseCount"] * SYNAPSE_STRIDE),
         ("range", blocks["range"][0], hdr["neuronCount"] * RANGE_STRIDE),
         ("region", blocks["region"][0], hdr["regionCount"] * REGION_STRIDE),
+        # The expected ID-block length depends on the header FLAG, not on a
+        # count: neuronCount × 8 when the asset records IDs, 0 when it does
+        # not. Checking it here means a file whose flag and payload disagree is
+        # refused instead of rewritten with the contradiction intact.
+        ("sourceID", blocks["sourceID"][0],
+         hdr["neuronCount"] * SOURCE_ID_STRIDE if hdr.get("hasSourceIDs") else 0),
     ]
     bad = False
     for name, got, want in checks:

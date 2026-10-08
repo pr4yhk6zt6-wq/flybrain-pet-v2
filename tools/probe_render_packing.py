@@ -36,6 +36,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fbpack import neuron_at, parse  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 SWIFT_TYPES = ROOT / "ios/Sources/FlyBrainCore/Types.swift"
 SWIFT_MODEL = ROOT / "ios/Sources/FlyBrainCore/ConnectomeRenderModel.swift"
@@ -71,23 +74,14 @@ def measured_banc_extents():
     """
     if not SHIPPED_BANC.exists():
         return None
-    import struct
-    blob = SHIPPED_BANC.read_bytes()
-    hlen = struct.unpack_from("<Q", blob, 0)[0]
-    off = 8 + hlen
-    for _ in range(4):                       # neuron, synapse, range, region
-        blen = struct.unpack_from("<Q", blob, off)[0]
-        off += 8
-        if _ == 0:
-            neurons = blob[off:off + blen]
-        off += blen
-    stride = 44
+    hdr, blocks = parse(SHIPPED_BANC)
+    nb = blocks["neuron"]
     lo = [float("inf")] * 3
     hi = [float("-inf")] * 3
-    fmt = "<iBHBBBBBiiiiifff"
-    for i in range(len(neurons) // stride):
-        v = struct.unpack_from(fmt, neurons, i * stride)
-        for k, val in enumerate(v[13:16]):
+    for i in range(int(hdr["neuronCount"])):
+        v = neuron_at(nb, i)
+        for k, key in enumerate(("x", "y", "z")):
+            val = v[key]
             lo[k] = min(lo[k], val)
             hi[k] = max(hi[k], val)
     return lo, hi

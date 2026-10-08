@@ -27,6 +27,8 @@ jobs:
           python tools/tests/validate_fbpack.py data/generated/demo_micro.fbpack
           python tools/gen_synth.py /tmp/demo_regen.fbpack
           python tools/tests/validate_fbpack.py /tmp/demo_regen.fbpack
+      - name: Traceability gate (every neuron must name its source cell)
+        run: python tools/verify_traceability.py
       - name: Swift test fixture must match the pipeline asset
         run: python tools/sync_test_asset.py --check
       - name: Neural engine offline mirror (parity with Swift)

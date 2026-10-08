@@ -7,6 +7,7 @@
 # branch that a bug once got wrong.
 import csv
 import gzip
+import json
 import pickle
 import struct
 import sys
@@ -20,12 +21,29 @@ from flybrain.banc import (  # noqa: E402
     build_banc_asset, sign_for, transmitter_enum,
 )
 from flybrain.neuropil import UNMAPPED_APPROXIMATIONS, map_neuropil  # noqa: E402
-from flybrain.pid import RegionID, TransmitterType  # noqa: E402
+from flybrain.pack import pack, source_ids_from  # noqa: E402
+from flybrain.pid import (  # noqa: E402
+    RegionID, TransmitterType, build_synthetic_demo,
+)
 
 STRIDE_NEURON = 44
 STRIDE_SYNAPSE = 20
 STRIDE_RANGE = 8
 STRIDE_REGION = 28      # u8 region + 3 pad + 6 f32 — NOT 32
+STRIDE_SOURCE_ID = 8    # v3: u64 original dataset ID per neuron
+
+
+def _parse_bytes(blob: bytes):
+    """Same walk as `_parse`, for an asset that was never written to disk."""
+    off = 0
+    hlen = struct.unpack_from("<Q", blob, off)[0]; off += 8
+    hdr = json.loads(blob[off:off + hlen].rstrip(b"\x00")); off += hlen
+    blocks = {}
+    for name in ("neuron", "synapse", "range", "region", "sourceID"):
+        blen = struct.unpack_from("<Q", blob, off)[0]; off += 8
+        blocks[name] = blob[off:off + blen]; off += blen
+    assert off == len(blob), f"{len(blob) - off} trailing bytes"
+    return hdr, blocks
 
 
 def _write_fixture(root: Path, *, n=10, extra_types=0, unmapped_tag=None):
@@ -84,6 +102,14 @@ def _write_fixture(root: Path, *, n=10, extra_types=0, unmapped_tag=None):
         w.writerow(cols)
         for i, (rid, top, ctype, nt) in enumerate(rows):
             super_class = "glia" if i == 2 else "central"
+            # The real release labels motor and sensory cells, and the ingest
+            # keeps that label in the neuron's flag byte. The fixture must carry
+            # a couple so the serialiser's handling of it is exercised: with no
+            # labelled cell here, writing a literal 0 in that byte was invisible.
+            if i == 4:
+                super_class = "motor"
+            elif i == 5:
+                super_class = "sensory"
             row = [""] * len(cols)
             row[0] = rid
             row[1] = top
@@ -156,7 +182,7 @@ def _parse(path: Path):
     import json as _json
     hdr = _json.loads(blob[off:off + hlen].rstrip(b"\x00")); off += hlen
     blocks = {}
-    for name in ("neuron", "synapse", "range", "region"):
+    for name in ("neuron", "synapse", "range", "region", "sourceID"):
         blen = struct.unpack_from("<Q", blob, off)[0]; off += 8
         blocks[name] = blob[off:off + blen]; off += blen
     assert off == len(blob), f"{len(blob) - off} trailing bytes"
@@ -280,11 +306,13 @@ def test_cell_type_is_u16_so_a_large_vocabulary_survives(tmp_path):
     # allowed extra synthesized cell types.
     _rows, _result, out, _size = _fixture(tmp_path, extra_types=300)
     hdr, blocks = _parse(out)
-    # v2 layout: the cell-type field is the u16 at byte 10 (id 0; datasetID 4;
+    # v3 layout: the cell-type field is the u16 at byte 10 (id 0; datasetID 4;
     # region 5; side 6; transmitter 7; provenance 8; flags 9; type 10). The
     # test read it from byte 6 — a u8-era offset — and passed only because the
     # fixture had 3 cells; BANC has 11,566 distinct cell types.
-    assert hdr["version"] == 2
+    # v3 appended the original-ID block (see the sourceID tests below); the
+    # neuron record itself is unchanged at 44 bytes.
+    assert hdr["version"] == 3
     assert STRIDE_NEURON == 44
     n = hdr["neuronCount"]
     types = [struct.unpack_from("<H", blocks["neuron"],
@@ -436,3 +464,108 @@ def test_flags_land_on_the_wire_at_offset_9():
     # and the neighbours are untouched
     assert struct.unpack_from("<H", b, 10)[0] == 7
     assert b[8] == 1
+
+
+def test_banc_serialiser_keeps_the_class_label(fixture):
+    """The class label must survive the BANC writer, not just the model.
+
+    `pid.build_synthetic_demo` goes through `pack._neuron_bytes`, but the BANC
+    ingest has its OWN serialiser, and that one wrote a literal 0 into the flags
+    byte. Every neuron in the whole-CNS asset therefore shipped classless: the
+    motor readout could not tell a leg motor neuron from the sensory afferents
+    sharing its neuromere, and the shipped-asset gate had nothing to find
+    because the label was gone before it reached the file. The fixture now
+    labels one motor and one sensory cell so this is observable at all.
+    """
+    _rows, _result, out, _size = fixture
+    _hdr, blocks = _parse(out)
+    n = len(blocks["neuron"]) // STRIDE_NEURON
+    flags = [struct.unpack_from("<iBBBBBBH", blocks["neuron"],
+                                i * STRIDE_NEURON)[6] for i in range(n)]
+    assert any(f != 0 for f in flags), \
+        "every neuron serialised with flags == 0 — the class label was dropped"
+    assert sum(1 for f in flags if f & 1) == 1, "one motor cell expected"
+    assert sum(1 for f in flags if f & 2) == 1, "one sensory cell expected"
+
+
+# --------------------------------------------------------------------------
+# v3: original dataset IDs (docs/TRACEABILITY.md)
+#
+# BEFORE this block existed, `canonicalID` was filled with `len(neurons)` — the
+# array position — while CONNECTOME.md told the reader the IDs were "kept".
+# Nothing failed, because nothing compared the two: the BANC release's Root IDs
+# are 60-bit (measured min 720575940381905254) and cannot survive an i32, so the
+# only way to notice was to go and look at what the numbers were.
+# --------------------------------------------------------------------------
+
+def test_banc_asset_records_the_release_root_ids(fixture):
+    """The original IDs are on the wire, in array order, one per neuron.
+
+    This is the regression test for the defect above: it asserts the asset can
+    name the release cell, not just its own array index.
+
+    Deliberately does NOT restate the drop policy (which cells survive is other
+    tests' subject). It asserts the property that traceability needs: every ID
+    is a real ID from the source file, and the kept ones keep their original
+    order. Re-deciding the drops here would make this test disagree with the
+    ingest for reasons that have nothing to do with IDs.
+    """
+    rows, _result, out, _size = fixture
+    hdr, blocks = _parse(out)
+    assert hdr["hasSourceIDs"] is True
+    assert len(blocks["sourceID"]) == hdr["neuronCount"] * STRIDE_SOURCE_ID
+    ids = source_ids_from(blocks["sourceID"])
+    source = [int(r[0]) for r in rows]
+    assert len(ids) == hdr["neuronCount"]
+    assert set(ids) <= set(source), "an ID that is not a source row is fabricated"
+    # order-preserving subsequence of the source rows (the release is sorted,
+    # and the ingest streams it, so reordering would mean the CSR is wrong too)
+    it = iter(source)
+    assert all(any(s == i for s in it) for i in ids), \
+        f"{ids} is not an ordered subsequence of {source}"
+
+
+def test_source_id_is_not_the_array_index(fixture):
+    """Pin the DISTINCTION, not just the presence.
+
+    The defect was that the two were the same number, which made every value
+    look plausible. This asserts they differ, so a future change that collapses
+    them back fails here instead of at the point someone tries to trace a cell.
+    """
+    _rows, _result, out, _size = fixture
+    _hdr, blocks = _parse(out)
+    ids = source_ids_from(blocks["sourceID"])
+    canon = [struct.unpack_from("<i", blocks["neuron"], i * STRIDE_NEURON)[0]
+             for i in range(len(ids))]
+    assert canon == list(range(len(canon))), "canonicalID is the dense index"
+    assert ids != canon, "source IDs must not be the dense simulator index"
+
+
+def test_asset_without_source_ids_says_so(tmp_path):
+    """A neuron with no known source ID must produce NO block, not a block of 0s.
+
+    0 is a legal dataset ID, so padding the unknown slots with it would state a
+    fact that is not known — and a reader resolving "cell 0" does not fail, it
+    answers confidently about the wrong neuron.
+    """
+    from flybrain.pid import NeuronRecord
+    from flybrain.pack import pack as _pack
+    data = build_synthetic_demo(neurons_per_region=2)
+    for nr in data["neurons"]:
+        nr.sourceID = NeuronRecord.NO_SOURCE_ID
+    blob = _pack(data, generated_by="test")
+    hdr, blocks = _parse_bytes(blob)
+    assert hdr["hasSourceIDs"] is False
+    assert blocks["sourceID"] == b"", "unknown IDs must not be written as 0"
+
+
+def test_source_id_block_survives_the_round_trip_multi_byte():
+    """A >32-bit ID must come back exactly, or traceability is lost silently."""
+    data = build_synthetic_demo(neurons_per_region=2)
+    big = 0x0A00000F0F0F0F0F      # shaped like a BANC Root ID (60-bit)
+    data["neurons"][0].sourceID = big
+    blob = pack(data, generated_by="test")
+    _hdr, blocks = _parse_bytes(blob)
+    ids = source_ids_from(blocks["sourceID"])
+    assert ids[0] == big
+    assert ids[0] > 2**32, "the value has to exceed int32 or the test proves nothing"

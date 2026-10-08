@@ -8,6 +8,7 @@ Wire format (little-endian, fixed offsets; mirrors Swift Connectome.swift):
     [u64 synapseBytes][SynapseRecord × synapseCount]   stride 20
     [u64 rangeBytes][OutEdgeRange × neuronCount]       stride 8
     [u64 regionBytes][RegionBounds × regionCount]      stride 28
+    [u64 sourceIDBytes][u64 × neuronCount]             stride 8    (v3)
 
 NeuronRecord (44): i32 canonicalID; u8 datasetID,region,side,transmitter,
     provenance; u8 flags; u16 type; i32 morphologyIndex,incomingStart,
@@ -15,6 +16,13 @@ NeuronRecord (44): i32 canonicalID; u8 datasetID,region,side,transmitter,
     (byte offsets: id 0, datasetID 4, region 5, side 6, transmitter 7,
      provenance 8, flags 9, type 10, morphology 12, in 16/20, out 24/28,
      x 32, y 36, z 40 — pinned by python/tests/test_banc.py)
+
+`canonicalID` is the DENSE SIMULATOR INDEX (the array position, and the
+numbering SynapseRecord endpoints use), NOT the source dataset's own ID. The
+original ID did not fit in the 44-byte record — the BANC release's Root IDs are
+60-bit integers (measured min 720575940381905254) — so v3 appends a separate
+u64-per-neuron block rather than widening the field and moving every offset.
+See docs/TRACEABILITY.md.
 
 `flags` was reserved and dropped on read; it now carries the MEASURED
 cell class (FLAG_MOTOR / FLAG_SENSORY from the release's `Super Class`),
@@ -42,6 +50,19 @@ import time
 from pathlib import Path
 
 from .pid import ConnectomeHeader, NeuronRecord, OutEdgeRange, RegionBounds, SynapseRecord
+
+# Record strides, in the one module that writes them. Tools and tests import
+# these instead of restating the numbers: a copied constant does not fail when
+# the format moves, it mis-indexes and then asserts about the wrong bytes.
+NEURON_STRIDE = 44
+SYNAPSE_STRIDE = 20
+RANGE_STRIDE = 8
+REGION_STRIDE = 28
+SOURCE_ID_STRIDE = 8        # v3: one u64 per neuron, original dataset IDs
+
+BLOCK_ORDER = ("neuron", "synapse", "range", "region", "sourceID")
+
+CURRENT_VERSION = 3
 
 
 # Cell-class bits on the wire (NeuronRecord.flags, byte 9). These are MEASURED
@@ -95,6 +116,23 @@ def _region_bytes(r: RegionBounds) -> bytes:
     return struct.pack("<B3x6f", r.region, r.minX, r.minY, r.minZ, r.maxX, r.maxY, r.maxZ)
 
 
+def _source_id_bytes(neurons: list[NeuronRecord]) -> tuple[bytes, bool]:
+    """The v3 original-ID block: one u64 per neuron, in array order.
+
+    It is written ONLY when every neuron has a source ID, and the header's
+    `hasSourceIDs` records that. A partially-identified asset writes a
+    zero-length block instead of padding the unknown slots with 0, because 0 is
+    a legal ID and "unknown" must not be spelled the same way as "cell 0" —
+    a reader that confuses them would confidently resolve the wrong neuron.
+    The count of unidentified neurons is the caller's to report; what matters
+    here is that the file never states an ID it does not have.
+    """
+    if any(n.sourceID == NeuronRecord.NO_SOURCE_ID or n.sourceID < 0
+           for n in neurons):
+        return b"", False
+    return b"".join(struct.pack("<Q", n.sourceID) for n in neurons), True
+
+
 def pack(data: dict, *, generated_by: str) -> bytes:
     """Serialize a dataset dict (as produced by build_synthetic_demo) to bytes."""
     header: ConnectomeHeader = data["header"]
@@ -110,14 +148,19 @@ def pack(data: dict, *, generated_by: str) -> bytes:
     header.generatedBy = generated_by
     header.generationDate = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    hdr = json.dumps(header.to_json_dict(), separators=(",", ":")).encode("utf-8")
-    hdr_pad = (-len(hdr)) % 16
-    hdr += b"\x00" * hdr_pad
-
     neuron_blob = b"".join(_neuron_bytes(n) for n in neurons)
     synapse_blob = b"".join(_synapse_bytes(s) for s in synapses)
     range_blob = b"".join(_range_bytes(r) for r in ranges)
     region_blob = b"".join(_region_bytes(r) for r in regions)
+    source_blob, has_source_ids = _source_id_bytes(neurons)
+    # The header must describe the block that was actually written, and the
+    # block is only written when every neuron has an ID. Setting the flag from
+    # the same helper that produced the bytes keeps the two from disagreeing.
+    header.hasSourceIDs = has_source_ids
+    # The header is serialised AFTER the flag is final: writing it before would
+    # ship a header that says false while a block follows it.
+    hdr = json.dumps(header.to_json_dict(), separators=(",", ":")).encode("utf-8")
+    hdr += b"\x00" * ((-len(hdr)) % 16)
 
     out = b""
     out += struct.pack("<Q", len(hdr)) + hdr
@@ -125,7 +168,35 @@ def pack(data: dict, *, generated_by: str) -> bytes:
     out += struct.pack("<Q", len(synapse_blob)) + synapse_blob
     out += struct.pack("<Q", len(range_blob)) + range_blob
     out += struct.pack("<Q", len(region_blob)) + region_blob
+    out += struct.pack("<Q", len(source_blob)) + source_blob
     return out
+
+
+def parse_fbpack(blob: bytes):
+    """Decode a .fbpack into (header, blocks). Mirrors the Swift loader.
+
+    Kept next to the writer so the two cannot drift: this is the reader used to
+    check round trips in tests, and a reader that disagrees with the writer is
+    exactly the failure the cross-language tests exist to catch.
+    """
+    (hlen,) = struct.unpack_from("<Q", blob, 0)
+    raw = blob[8:8 + hlen].split(b"\x00", 1)[0]
+    header = json.loads(raw.decode("utf-8"))
+    blocks = {}
+    off = 8 + hlen
+    for name in BLOCK_ORDER:
+        (blen,) = struct.unpack_from("<Q", blob, off)
+        off += 8
+        blocks[name] = blob[off:off + blen]
+        off += blen
+    if off != len(blob):
+        raise ValueError(f"{len(blob) - off} trailing bytes after {len(blocks)} blocks")
+    return header, blocks
+
+
+def source_ids_from(block: bytes) -> list[int]:
+    """The v3 original-ID block as a list of ints."""
+    return list(struct.unpack(f"<{len(block) // 8}Q", block))
 
 
 def write_fbpack(data: dict, path: str | Path, *, generated_by: str = "flybrain/pack.py") -> Path:

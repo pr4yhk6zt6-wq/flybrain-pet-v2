@@ -32,6 +32,23 @@ duplication, Root-ID ordering, coordinate-frame orientation, voxel scale
 (4/4/40 nm), transmitter census, tag-list ordering, and the full drop
 breakdown with the number of connections each drop actually removes.
 
+`tools/verify_banc.py` is the gate that compares the compiled `.fbpack` against
+the release itself (it reads both, so a bug in the ingest cannot validate
+itself). **It is not run in CI** — it needs the 48 MB raw release, which is not
+on the runner — so it must be run by hand after any ingest change:
+
+```
+python3 tools/verify_banc.py data/generated/banc_cns.fbpack --sample 3000
+```
+
+It re-derives, per sampled neuron, the region, side, soma position, **the class
+byte from the release's `Super Class`**, and **the neuron's own Root ID**, and
+per sampled edge the `(pre, post, merged synapse count)`. Every one of those
+must be asserted for the comparison to mean anything: two of them were once
+computed and then discarded, and the verifier passed on an asset whose class
+bytes and IDs were both wrong. Verified to FAIL by doctoring one neuron's class
+byte and one neuron's ID in a copy of the real asset (3 checks fire).
+
 ### Swift core (XCTest, `ios/Tests/FlyBrainCoreTests/`) — requires Xcode
 
 - event heap total order & deterministic tie-break

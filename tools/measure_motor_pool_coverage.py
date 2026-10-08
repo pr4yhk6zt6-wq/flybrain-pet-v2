@@ -18,9 +18,9 @@ Read-only: prints, changes nothing, exits 0 either way.
 from __future__ import annotations
 
 import collections
-import json
+# import json  # orphaned when the block walk moved to tools/fbpack.py
 import os
-import struct
+# import struct  # orphaned when the block walk moved to tools/fbpack.py
 import sys
 from pathlib import Path
 
@@ -28,6 +28,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
 
 from flybrain.pid import RegionID  # noqa: E402
+
+sys.path.insert(0, HERE)
+from fbpack import neuron_at, parse  # noqa: E402
 
 MOTOR = 1 << 0
 SENSORY = 1 << 1
@@ -45,21 +48,12 @@ ASSET = Path(__file__).resolve().parents[1] / "data/generated/banc_cns.fbpack"
 
 
 def load_asset(path: Path):
-    blob = path.read_bytes()
-    hlen = struct.unpack_from("<Q", blob, 0)[0]
-    hdr = json.loads(blob[8:8 + hlen].rstrip(b"\x00"))
-    off = 8 + hlen
-    lens = {}
-    for name in ("neuron", "synapse", "range", "region"):
-        ln = struct.unpack_from("<Q", blob, off)[0]
-        lens[name] = (ln, off + 8)
-        off += 8 + ln
-    no = lens["neuron"][1]
-    cells = []
-    for i in range(hdr["neuronCount"]):
-        _cid, _ds, region, side, _tx, _prov, flags = struct.unpack_from(
-            "<iBBBBBB", blob, no + i * STRIDE)
-        cells.append((region, side, flags))
+    """Header + (region, side, flags) per neuron via the shared reader."""
+    hdr, blocks = parse(path)
+    nb = blocks["neuron"]
+    cells = [(neuron_at(nb, i)["region"], neuron_at(nb, i)["side"],
+              neuron_at(nb, i)["flags"])
+             for i in range(int(hdr["neuronCount"]))]
     return hdr, cells
 
 

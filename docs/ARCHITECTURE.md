@@ -30,12 +30,17 @@ ios/Sources/FlyBrainCore/
 
 ## Data model
 
-- **Neuron** — packed `NeuronRecord` (44 B): canonical ID, dataset, type, region,
-  side, transmitter, provenance, morphology ref, CSR incoming/outgoing ranges, xyz.
+- **Neuron** — packed `NeuronRecord` (44 B): dense array index, dataset, type,
+  region, side, transmitter, provenance, morphology ref, CSR incoming/outgoing
+  ranges, xyz.
 - **Synapse** — packed `SynapseRecord` (20 B): pre/post, synapseCount,
   transmitter, sign, confidence, delaySteps, **estimatedEfficacy (INFERRED)**.
 - **Ranges** — CSR outgoing adjacency: per-neuron `(start, count)` into `synapses[]`.
 - **Region bounds** — for culling / LOD.
+- **Source IDs** — v3, `u64` per neuron in array order: the source dataset's own
+  ID, for tracing a cell back to the release it came from. Absent (zero-length,
+  with `header.hasSourceIDs == false`) when the asset does not record them.
+  These do not fit the 44-byte record; see `TRACEABILITY.md`.
 
 Static topology is **shared** across flies (spec #117); dynamic neural state is
 **per fly**.

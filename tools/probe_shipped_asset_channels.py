@@ -33,16 +33,19 @@ Run: python3 tools/probe_shipped_asset_channels.py
 """
 from __future__ import annotations
 
-import json
+# import json  # orphaned when the block walk moved to tools/fbpack.py
 import os
 import re
-import struct
+# import struct  # orphaned when the block walk moved to tools/fbpack.py
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
 
 from flybrain.pid import RegionID  # noqa: E402
+
+sys.path.insert(0, HERE)
+from fbpack import neuron_at, parse  # noqa: E402
 
 MOTOR = 1 << 0
 SENSORY = 1 << 1
@@ -76,21 +79,12 @@ FAILS: list[str] = []
 
 
 def load(path: str):
-    blob = open(path, "rb").read()
-    hlen = struct.unpack_from("<Q", blob, 0)[0]
-    hdr = json.loads(blob[8:8 + hlen].rstrip(b"\x00"))
-    off = 8 + hlen
-    lens = {}
-    for name in ("neuron", "synapse", "range", "region"):
-        ln = struct.unpack_from("<Q", blob, off)[0]
-        lens[name] = (ln, off + 8)
-        off += 8 + ln
-    no = lens["neuron"][1]
+    hdr, blocks = parse(path)
+    nb = blocks["neuron"]
     cells = []
-    for i in range(hdr["neuronCount"]):
-        _cid, _ds, region, side, _tx, _prov, flags, typ = struct.unpack_from(
-            "<iBBBBBBH", blob, no + i * STRIDE)
-        cells.append((region, side, flags, typ))
+    for i in range(int(hdr["neuronCount"])):
+        v = neuron_at(nb, i)
+        cells.append((v["region"], v["side"], v["flags"], v["type"]))
     return hdr, cells
 
 

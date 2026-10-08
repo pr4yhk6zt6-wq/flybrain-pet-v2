@@ -151,4 +151,59 @@ final class FBPackCrossLanguageTests: XCTestCase {
         XCTAssertEqual(decodedMotor + decodedSensory,
                        c.neurons.reduce(0) { $0 + ($1.flags != 0 ? 1 : 0) })
     }
+
+    // MARK: - v3 original dataset IDs, across the language boundary
+
+    /// The original-ID block must be present, exact, and aligned to the neuron
+    /// array — asserted against the bytes on disk, not against the reader.
+    ///
+    /// This is the cross-language half of docs/TRACEABILITY.md: Python writes
+    /// the block, Swift reads it, and a mismatch (endianness, stride, order)
+    /// would otherwise be invisible on both sides, since each can only test
+    /// itself.
+    func testPipelineAssetSourceIDsMatchTheBytes() throws {
+        let url = try pipelineAssetURL()
+        let blob = try Data(contentsOf: url)
+        func u64(_ at: Int) -> Int {
+            var v: UInt64 = 0
+            for k in 0..<8 { v |= UInt64(blob[at + k]) << (8 * UInt64(k)) }
+            return Int(v)
+        }
+        var off = 8 + u64(0)
+        // Walk to the fifth block: neuron, synapse, range, region, then IDs.
+        for _ in 0..<4 {
+            let len = u64(off)
+            off += 8 + len
+        }
+        let idBytes = u64(off)
+        off += 8
+
+        let c = try Connectome.loadFBPack(from: url)
+        XCTAssertTrue(c.header.recordsSourceIDs,
+                      "the shipped demo asset records source IDs")
+        XCTAssertEqual(idBytes, c.neuronCount * 8,
+                       "one u64 per neuron, no padding")
+        XCTAssertTrue(c.recordsSourceIDs)
+        XCTAssertEqual(c.sourceIDs.count, c.neuronCount)
+
+        // Read the IDs straight out of the file and require the reader to agree.
+        var raw = [UInt64]()
+        raw.reserveCapacity(c.neuronCount)
+        for i in 0..<c.neuronCount {
+            var v: UInt64 = 0
+            for k in 0..<8 { v |= UInt64(blob[off + i * 8 + k]) << (8 * UInt64(k)) }
+            raw.append(v)
+        }
+        XCTAssertEqual(c.sourceIDs, raw, "the reader must decode the block as written")
+
+        // The point of the field: these are NOT the array indices. Every value
+        // in the demo asset is above int32 and distinct, so a decoder that
+        // still took the ID from the i32 canonicalID slot cannot pass.
+        XCTAssertGreaterThan(raw.min()!, UInt64(Int32.max),
+                             "demo IDs must exceed int32 so the test can tell the "
+                             + "two apart; an index would satisfy every other check")
+        XCTAssertEqual(Set(raw).count, raw.count, "IDs must be distinct")
+        XCTAssertEqual(Set(c.neurons.map { $0.canonicalID }).count, c.neuronCount,
+                       "canonicalID is the dense array index, still distinct")
+    }
 }

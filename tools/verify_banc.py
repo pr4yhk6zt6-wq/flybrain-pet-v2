@@ -23,26 +23,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
-from flybrain.neuropil import map_neuropil  # noqa: E402
 from flybrain.pid import Provenance  # noqa: E402
+from flybrain.pack import (CURRENT_VERSION, NEURON_STRIDE,  # noqa: E402
+                           SYNAPSE_STRIDE, neuron_flags, parse_fbpack,
+                           source_ids_from)
 
-NEURON_STRIDE = 44
-SYNAPSE_STRIDE = 20
+# The block walk lives in flybrain.pack, next to the writer. This verifier used
+# to carry its own copy that stopped after the `region` block; when v3 appended
+# the sourceID block, that copy reported "trailing bytes" and refused to open a
+# valid asset. A private copy of a format does not fail when the format moves —
+# it fails later, and about the wrong thing.
 
 
 def parse_asset(path):
-    blob = path.read_bytes()
-    off = 0
-    hlen = struct.unpack_from("<Q", blob, off)[0]; off += 8
-    hdr = json.loads(blob[off:off + hlen].rstrip(b"\x00")); off += hlen
-    blocks = {}
-    for name in ("neuron", "synapse", "range", "region"):
-        blen = struct.unpack_from("<Q", blob, off)[0]; off += 8
-        blocks[name] = memoryview(blob)[off:off + blen]
-        off += blen
-    if off != len(blob):
-        raise ValueError(f"{len(blob) - off} trailing bytes after the last block")
-    return hdr, blocks
+    with open(path, "rb") as fh:
+        hdr, blocks = parse_fbpack(fh.read())
+    return hdr, {k: memoryview(v) for k, v in blocks.items()}
 
 
 def neuron_at(block, i):
@@ -90,8 +86,8 @@ def main():
             failures.append(f"{name}: {detail}")
 
     # ---- structural -------------------------------------------------------
-    check("version is 2 (cell type widened to u16)",
-          hdr.get("version") == 2, f"got {hdr.get('version')}")
+    check("version is 3 (original-ID block appended)",
+          hdr.get("version") == CURRENT_VERSION, f"got {hdr.get('version')}")
     check("neuron block size matches header",
           len(blocks["neuron"]) == n_neurons * NEURON_STRIDE,
           f"{len(blocks['neuron'])} != {n_neurons * NEURON_STRIDE}")
@@ -101,17 +97,21 @@ def main():
     check("range block has one entry per neuron",
           len(blocks["range"]) == n_neurons * 8,
           f"{len(blocks['range'])} != {n_neurons * 8}")
-    # The `flags` field is reserved and no reader consults it, so it must NOT be
-# used to carry meaning. Real-vs-synthetic is carried by `dataProvenance`, the
-# Provenance enum NAME (RECONSTRUCTED for real data, INFERRED for the demo).
-# The wire form is the enum's NAME, not its integer: Swift decodes this field
-# as `ConnectomeHeader.dataProvenance: String`, so an integer here made
-# JSONDecoder reject every asset the pipeline wrote.
+    # The header's `flags` field is reserved and no reader consults it, so it
+    # must NOT be used to carry meaning. Real-vs-synthetic is carried by
+    # `dataProvenance`, the Provenance enum NAME (RECONSTRUCTED for real data,
+    # INFERRED for the demo). The wire form is the enum's NAME, not its integer:
+    # Swift decodes this field as `ConnectomeHeader.dataProvenance: String`, so
+    # an integer here made JSONDecoder reject every asset the pipeline wrote.
+    #
+    # Note this is the header's `flags`, NOT the per-neuron `flags` byte, which
+    # DOES carry meaning (the release's `Super Class`, motor/sensory) and is
+    # checked in the per-neuron section below.
     check("dataset is marked as reconstructed (real) data",
           hdr.get("dataProvenance") == Provenance.RECONSTRUCTED.name,
           f"dataProvenance={hdr.get('dataProvenance')!r} "
           f"(want {Provenance.RECONSTRUCTED.name!r})")
-    check("reserved flags field is left at 0",
+    check("reserved HEADER flags field is left at 0",
           hdr.get("flags", 0) == 0, f"flags={hdr.get('flags')}")
     check("organism defaults to adult female",
           hdr["organism"].get("sex") == "female" and
@@ -121,7 +121,22 @@ def main():
           any("BANC" in s for s in hdr.get("sourceDatasets", [])),
           str(hdr.get("sourceDatasets")))
 
-    # ---- cell-type vocabulary is not aliased ------------------------------
+    # ---- original dataset IDs (v3) ---------------------------------------
+    # This verifier replays the release, so this is the strongest place to check
+    # traceability: every ID the asset claims must be a Root ID that genuinely
+    # exists in neurons.csv.gz, and no two neurons may claim the same one.
+    check("asset records original dataset IDs (header flag)",
+          bool(hdr.get("hasSourceIDs")), f"hasSourceIDs={hdr.get('hasSourceIDs')}")
+    ids = source_ids_from(blocks.get("sourceID", b""))
+    check("one original ID per neuron",
+          len(ids) == n_neurons, f"{len(ids)} != {n_neurons}")
+    check("original IDs are distinct",
+          len(set(ids)) == len(ids),
+          f"{len(ids) - len(set(ids))} duplicates")
+    # Array index is NOT the ID: this is the defect the block exists to fix.
+    check("original IDs are not the array indices",
+          ids != list(range(n_neurons)),
+          "0..n-1 means the IDs were replaced by the array position again")
     # The v1 u8 field collapsed every cell type above 255 onto the region byte.
     # Reading the field back as u16 must give strictly more than 256 distinct
     # values for a real release; a u8-shaped asset cannot.
@@ -191,7 +206,12 @@ def main():
         region, _u = _dominant_region(a, side_raw, Counter())
         if region == int(RegionID.UNKNOWN):
             continue
-        order.append((rid, region, side_raw, _parse_position(a.get("position"))))
+        # The release's own `Super Class` label is carried through the replay so
+        # the class byte can be re-derived here. Without it `neuron_flags` had
+        # nothing to read and the comparison below counted nothing — see the
+        # note at the assertion.
+        order.append((rid, region, side_raw, _parse_position(a.get("position")),
+                      (row.get("Super Class") or "").strip()))
     del table, attrs
 
     check("canonical-order reconstruction matches the asset size",
@@ -199,9 +219,9 @@ def main():
           f"replayed {len(order)} neurons, asset has {n_neurons}")
 
     n = min(args.sample, n_neurons, len(order))
-    mism_region = mism_pos = mism_side = 0
+    mism_region = mism_pos = mism_side = mism_class = mism_id = 0
     for cid in range(n):
-        rid, region, side_raw, pos = order[cid]
+        rid, region, side_raw, pos, super_class = order[cid]
         rec = neuron_at(blocks["neuron"], cid)
         if rec["cid"] != cid:
             failures.append(f"neuron {cid}: canonicalID field is {rec['cid']}")
@@ -211,6 +231,17 @@ def main():
         want_side = 1 if side_raw == "left" else 2 if side_raw == "right" else 0
         if rec["side"] != want_side:
             mism_side += 1
+        # The class label is re-derived from the release's own `Super Class`
+        # here, independently of the ingest. This is the check that would have
+        # caught the BANC serialiser writing a literal 0 into that byte: the
+        # label was computed, then dropped before the file, and nothing
+        # compared the asset against the release's labels.
+        want_flags = neuron_flags(super_class)
+        if rec["flags"] != want_flags:
+            mism_class += 1
+        # Traceability: the ID in the file must be THIS row's root ID.
+        if source_ids_from(blocks["sourceID"])[cid] != rid:
+            mism_id += 1
         if pos:
             if (abs(rec["x"] - pos[0]) > 1e-3 or abs(rec["y"] - pos[1]) > 1e-3
                     or abs(rec["z"] - pos[2]) > 1e-3):
@@ -221,10 +252,24 @@ def main():
           mism_side == 0, f"{mism_side} mismatches")
     check(f"first {n} neurons carry the re-derived soma position",
           mism_pos == 0, f"{mism_pos} mismatches")
+    # These two counters were incremented but never asserted: the class byte
+    # and the root ID were compared on every neuron and then thrown away, so
+    # the verifier could not report the two defects it was written to catch
+    # (the serialiser writing a literal 0 into `flags`, and `canonicalID`
+    # holding the array index instead of the release's Root ID). A counter
+    # nothing reads is not a check.
+    check(f"first {n} neurons carry the release's own class label",
+          mism_class == 0, f"{mism_class} mismatches")
+    check(f"first {n} neurons carry their own release Root ID",
+          mism_id == 0, f"{mism_id} mismatches")
 
     # edge-level: replay the first N connection rows and compare the record
-    kept = set(rid for rid, _r, _s, _p in order)
-    canon = {rid: i for i, (rid, _r, _s, _p) in enumerate(order)}
+    # Index by POSITION, not by unpacking the replay tuple: the tuple grew a
+    # `Super Class` field for the class check, and a positional unpack elsewhere
+    # in the file is a second place that has to be found when it changes. These
+    # lines only ever wanted the root ID and its index.
+    kept = set(entry[0] for entry in order)
+    canon = {entry[0]: i for i, entry in enumerate(order)}
     want_edges = []
     with gzip.open(args.data / "connections_princeton.csv.gz", "rt", newline="") as fh:
         first = True

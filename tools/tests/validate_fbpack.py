@@ -5,46 +5,44 @@ Usage:
     python3 tools/tests/validate_fbpack.py data/generated/demo_micro.fbpack
 Exit code 0 = valid, 1 = invalid.
 """
-import json
-import struct
+# import json  # orphaned when the block walk moved to tools/fbpack.py
+# import struct  # orphaned when the block walk moved to tools/fbpack.py
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "python"))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from fbpack import (CURRENT_VERSION, FBPackError,  # noqa: E402
+                   NEURON_STRIDE, REGION_STRIDE, SOURCE_ID_STRIDE,
+                   SYNAPSE_STRIDE, expected_block_lengths, parse, source_id_at)
+
 STRIDE = {
-    "neuron": 44,
-    "synapse": 20,
+    "neuron": NEURON_STRIDE,
+    "synapse": SYNAPSE_STRIDE,
     "range": 8,
-    "region": 28,
+    "region": REGION_STRIDE,
 }
-
-
-def parse(path: Path):
-    blob = path.read_bytes()
-    off = 0
-    hlen = struct.unpack_from("<Q", blob, off)[0]; off += 8
-    hdr = json.loads(blob[off:off + hlen].rstrip(b"\x00")); off += hlen
-    blocks = {}
-    for name in ("neuron", "synapse", "range", "region"):
-        blen = struct.unpack_from("<Q", blob, off)[0]; off += 8
-        blocks[name] = blob[off:off + blen]; off += blen
-    return hdr, blocks
 
 
 def main() -> int:
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/generated/demo_micro.fbpack")
     if not path.exists():
         print(f"missing asset: {path}"); return 1
-    hdr, blocks = parse(path)
+    try:
+        hdr, blocks = parse(path)
+    except FBPackError as exc:
+        print(f"INVALID: {exc}")
+        return 1
     problems = []
     if hdr.get("magic") != 0x46425031:
         problems.append("bad magic")
-    # v2 widened NeuronRecord.type from u8 to u16 (the real BANC release has
-    # 11,566 cell types). A v1 asset has a different byte layout, so accepting
-    # both would mean silently misreading one of them.
-    if hdr.get("version") != 2:
-        problems.append(f"unsupported version {hdr.get('version')}")
+    # Version 3 appended the per-neuron original-ID block. A v1 asset has a
+    # different byte layout and a v2 asset has no ID block, so accepting any of
+    # them would mean silently misreading one of them.
+    if hdr.get("version") != CURRENT_VERSION:
+        problems.append(f"unsupported version {hdr.get('version')} "
+                        f"(this reader is v{CURRENT_VERSION})")
     n_neurons = len(blocks["neuron"]) // STRIDE["neuron"]
     n_syn = len(blocks["synapse"]) // STRIDE["synapse"]
     n_rng = len(blocks["range"]) // STRIDE["range"]
@@ -57,6 +55,17 @@ def main() -> int:
         problems.append(f"range block {n_rng} != neuron {n_neurons}")
     if len(blocks["neuron"]) % STRIDE["neuron"] or len(blocks["synapse"]) % STRIDE["synapse"]:
         problems.append("unaligned block")
+    # Original dataset IDs (v3). The header flag and the block length must agree
+    # both ways, and the IDs must be DISTINCT: traceability is a bijection.
+    want_src = expected_block_lengths(hdr)["sourceID"]
+    if len(blocks["sourceID"]) != want_src:
+        problems.append(
+            f"sourceID block {len(blocks['sourceID'])} != header says "
+            f"{want_src} (hasSourceIDs={hdr.get('hasSourceIDs')})")
+    n_ids = len(blocks["sourceID"]) // SOURCE_ID_STRIDE
+    ids = [source_id_at(blocks["sourceID"], i) for i in range(n_ids)]
+    if ids and len(set(ids)) != len(ids):
+        problems.append(f"sourceID block has {len(ids) - len(set(ids))} duplicates")
     org = hdr.get("organism", {})
     if org.get("sex") != "female":
         problems.append("organism must default to adult female (spec #1)")
@@ -87,6 +96,11 @@ def main() -> int:
     print(f"  organism: {org.get('species')} ({org.get('sex')}, {org.get('lifeStage')})")
     print(f"  provenance: {hdr.get('dataProvenance')}")
     print(f"  cell class: motor {n_motor}, sensory {n_sensory}, unlabelled {n_other}")
+    if ids:
+        print(f"  source IDs: {len(ids)} recorded, {len(set(ids))} distinct, "
+              f"range {min(ids)}..{max(ids)}")
+    else:
+        print("  source IDs: none — this asset cannot be traced back to a release")
     return 0
 
 

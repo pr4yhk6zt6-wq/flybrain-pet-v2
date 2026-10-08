@@ -33,7 +33,21 @@ struct LifeView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("FlyBrain Pet").font(.title2.bold())
+            // The wordmark from the brand SVG (tools/make_app_icons.py builds
+            // the 1x/2x/3x imageset from assets/brand). Rendered, not re-drawn
+            // in SwiftUI, so it stays identical to the app icon's lettering.
+            //
+            // The SVG is a solid plate, not artwork on transparency: every
+            // border pixel is the same dark ground as the app icon
+            // (measured RGB 7,9,14 across all four edges), with the light
+            // lettering in the middle. So it reads correctly on the dark
+            // scheme and would look like a dark slab on a light one — worth
+            // knowing before it is put on a light background.
+            Image("FlyBrainLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 260)
+                .accessibilityLabel("FlyBrain Pet")
             Text("Adult female Drosophila — emergent behavior from a spiking connectome")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
 

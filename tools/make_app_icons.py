@@ -119,15 +119,24 @@ def main() -> int:
     with open(os.path.join(ICONSET, "..", "Contents.json"), "w") as f:
         json.dump({"info": {"version": 1, "author": "xcode"}}, f, indent=2)
 
-    # The in-app logo is a display asset, not an icon: one 3x PNG is enough and
-    # keeping it next to the icon keeps the app bundle self-contained.
-    logo_px = os.path.join(ICONSET, "..", "..", "Resources")
-    os.makedirs(logo_px, exist_ok=True)
-    # Width only: the logo is 800x300 and must not be squashed into a square.
-    rasterise(LOGO, 800, os.path.join(logo_px, "FlyBrainLogo.png"))
+    # The in-app logo is a display asset, not an icon, so it goes in the
+    # catalogue as an imageset — `Image("FlyBrainLogo")` then needs no bundle
+    # lookup code and no filename to keep in sync. Rendered at 1x/2x/3x from the
+    # SVG rather than upscaled, so the 3x copy is real resolution.
+    logo_dir = os.path.join(ICONSET, "..", "FlyBrainLogo.imageset")
+    os.makedirs(logo_dir, exist_ok=True)
+    logo_images = []
+    for scale, width in ((1, 800), (2, 1600), (3, 2400)):
+        name = f"FlyBrainLogo@{scale}x.png"
+        rasterise(LOGO, width, os.path.join(logo_dir, name))
+        logo_images.append({"idiom": "universal", "scale": f"{scale}x",
+                            "filename": name})
+    with open(os.path.join(logo_dir, "Contents.json"), "w") as f:
+        json.dump({"images": logo_images,
+                   "info": {"version": 1, "author": "xcode"}}, f, indent=2)
 
     print(f"wrote {len(images)} app icons to {ICONSET}")
-    print(f"wrote in-app logo to {logo_px}/FlyBrainLogo.png")
+    print(f"wrote in-app logo imageset to {logo_dir} (1x/2x/3x)")
     return 0
 
 

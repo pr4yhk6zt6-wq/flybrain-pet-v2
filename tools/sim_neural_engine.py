@@ -43,6 +43,16 @@ class Engine:
         self.lastSpike = [-1e18] * n
         self.time = 0.0
         self.cumTotal = 0
+        # Telemetry windows (mirrors Swift spikeEventsThisWindow/windowStartTime/
+        # lastWindowSpikesPerSecond/activeWindowMark/activeNeuronsThisWindow).
+        # Added so the snapshot-completeness gate can measure what a restore
+        # LOSES: these are measured against the engine clock, so restoring the
+        # clock without them makes every window look overdue.
+        self.windowStart = 0.0
+        self.spikeEventsThisWindow = 0
+        self.lastWindowSps = 0.0
+        self.activeMark = [0xFFFFFFFF] * n
+        self.activeCount = 0
         self.seq = 1
         self.heap = []
         # out-neighbours: list of (post, current)
@@ -147,16 +157,30 @@ class Engine:
             self.recentRing = []
             self.recentWindowStart = stepTime
         self.time = stepTime
+        # 1 s telemetry window (mirrors Swift step 3)
+        if self.time - self.windowStart >= 1000.0:
+            self.lastWindowSps = (self.spikeEventsThisWindow * 1000.0
+                                  / (self.time - self.windowStart))
+            self.spikeEventsThisWindow = 0
+            self.windowStart = self.time
+            self.activeCount = 0
+            self.activeMark = [0xFFFFFFFF] * self.n
 
     def emit(self, neuron, time):
         self.cum[neuron] += 1
         self.cumTotal += 1
+        self.spikeEventsThisWindow += 1
         if self.rate[neuron] == 0:
             self.rateRing.append(neuron)
         self.rate[neuron] += 1000.0 / max(self.motorRateTauMs, 0.001)
         if self.recent[neuron] == 0:
             self.recentRing.append(neuron)
         self.recent[neuron] += 1
+        # active-neuron bucket mark (mirrors Swift emitSpike)
+        bucket = int((time - self.windowStart) // 1000.0)
+        if self.activeMark[neuron] != bucket:
+            self.activeMark[neuron] = bucket
+            self.activeCount += 1
         for (post, cur) in self.out[neuron]:
             self.push(time + self.dt, post, cur)   # delaySteps=1 -> dt ms
 

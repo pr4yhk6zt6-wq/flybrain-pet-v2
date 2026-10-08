@@ -648,6 +648,41 @@ public final class NeuralEngine: @unchecked Sendable {
         public var eventSeq: UInt64
         public var dynamics: [NeuronDynamicsSnapshot]
         public var events: [SynapticEvent]
+
+        // MARK: Telemetry windows (format v2 — see the note on restore)
+        //
+        // These are not decoration. The two tumbling windows below decide WHEN
+        // state is CLEARED, and both are measured against `currentTimeMs`,
+        // which the snapshot already restores. Restoring the clock without the
+        // window starts makes every window look overdue by the full age of the
+        // simulation: the first step after a restore rolls all of them over at
+        // once, `lastWindowSpikesPerSecond` is computed by dividing by a window
+        // length that never existed, and the recent-spike ring is wiped — so a
+        // restored run reports a different `spikesPerSecond` than the run it
+        // replaced, from the same seed and the same connectome (spec #63).
+        public var spikeEventsThisWindow: UInt64
+        public var windowStartTime: Double
+        public var lastWindowSpikesPerSecond: Double
+        public var recentSpikesPerNeuron: [UInt16]
+        public var recentWindowStartTime: Double
+
+        /// Cumulative spikes are a monotone counter the inspector and the
+        /// tests read. Leaving them out made `totalSpikes(of:)` restart from
+        /// zero on restore while the run continued — a counter that cannot be
+        /// compared with itself across a checkpoint.
+        public var cumulativeSpikes: [UInt32]
+
+        public var activeNeuronsThisWindow: Int32
+        /// Per-neuron bucket marks for the active-neuron count. The sentinel is
+        /// `UInt32.max` for "not counted this window"; restoring the count
+        /// without the marks would re-count every neuron that fires next.
+        public var activeWindowMark: [UInt32]
+
+        /// Model levels are NOT derived from the connectome: the LOD scheduler
+        /// and `setModelLevel` mutate them, and they select which integration
+        /// equations run. A restore that guessed them would integrate different
+        /// math than the run it replaced (spec #48/#63).
+        public var modelLevels: [UInt8]
     }
 
     public struct NeuronDynamicsSnapshot: Codable, Sendable {
@@ -676,7 +711,16 @@ public final class NeuralEngine: @unchecked Sendable {
                                        lastSpikeTime: d.lastSpikeTime,
                                        leakyRate: leakyRatePerNeuron[i])
             },
-            events: eventHeap.allItems
+            events: eventHeap.allItems,
+            spikeEventsThisWindow: spikeEventsThisWindow,
+            windowStartTime: windowStartTime,
+            lastWindowSpikesPerSecond: lastWindowSpikesPerSecond,
+            recentSpikesPerNeuron: recentSpikesPerNeuron,
+            recentWindowStartTime: recentWindowStartTime,
+            cumulativeSpikes: cumulativeSpikes,
+            activeNeuronsThisWindow: activeNeuronsThisWindow,
+            activeWindowMark: activeWindowMark,
+            modelLevels: modelLevels
         )
     }
 
@@ -688,6 +732,33 @@ public final class NeuralEngine: @unchecked Sendable {
         rngState = snap.rngState
         spikeCount = snap.spikeCount
         eventSeq = snap.eventSeq
+
+        // Telemetry windows. Restoring the clock alone made the first step
+        // after a restore see every window as overdue and roll them all at
+        // once (see EngineSnapshot). Copy them back so the restored run
+        // continues the windows instead of restarting them.
+        spikeEventsThisWindow = snap.spikeEventsThisWindow
+        windowStartTime = snap.windowStartTime
+        lastWindowSpikesPerSecond = snap.lastWindowSpikesPerSecond
+        recentWindowStartTime = snap.recentWindowStartTime
+        activeNeuronsThisWindow = snap.activeNeuronsThisWindow
+
+        // Guarded by count because these are per-neuron arrays: an older
+        // snapshot (or a hand-written one) must not be able to resize the
+        // engine's storage out from under the connectome.
+        if snap.recentSpikesPerNeuron.count == recentSpikesPerNeuron.count {
+            recentSpikesPerNeuron = snap.recentSpikesPerNeuron
+        }
+        if snap.cumulativeSpikes.count == cumulativeSpikes.count {
+            cumulativeSpikes = snap.cumulativeSpikes
+        }
+        if snap.activeWindowMark.count == activeWindowMark.count {
+            activeWindowMark = snap.activeWindowMark
+        }
+        if snap.modelLevels.count == modelLevels.count {
+            modelLevels = snap.modelLevels
+        }
+
         for (i, d) in snap.dynamics.enumerated() {
             guard i < dynamics.count else { break }
             dynamics[i].voltage = d.voltage

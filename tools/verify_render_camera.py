@@ -335,23 +335,127 @@ print("=== screen axes point the expected way (image is not mirrored) ===")
 # symmetric orbit sweep cannot detect: a mirrored frustum is still a valid
 # frustum. With up=+z and yaw=pitch=0 the eye sits at +x looking back along -x,
 # so `north` (world +y) must land on screen RIGHT; after a quarter turn the eye
-# is at +y and the original `east` (+x) must fall to screen LEFT. The second is
-# the assertion that actually fails when the handedness flips — the first alone
-# can pass under some transpositions.
-def screen_x(p, up_v, yaw_v):
+# is at +y and the original `east` (+x) must fall to screen LEFT — the second is
+# the assertion that fails when the handedness flips.
+#
+# WAS WRONG, IN A WAY THE SWIFT MIRROR COULD NOT SHOW: the first version read
+# `w[0]` of the VIEW-space transform, i.e. the CLIP-space x BEFORE the
+# perspective divide. That is monotone in the screen x, so the sign checks were
+# correct, but it is not what the screen shows — and the Swift test that counted
+# on a magnitude got 0.2414 where it demanded 1.0 (the foreshortening of a 1 mm
+# step at a 10 mm distance: `tan(22.5°)/10`). Both were measuring a "which way"
+# quantity while one of them claimed "where". Everything below now goes through
+# the same full view-projection + divide a pixel would, and the axis is measured
+# as a symmetric displacement about the target so the expected value does not
+# depend on the camera's distance or field of view.
+def screen_xy(p, up_v, yaw_v):
+    """Screen coordinates (post-divide NDC) of `p`. The renderer's own path."""
     eye_v = camera_eye(cam, yaw=yaw_v, pitch=0.0)
     Vv = view_matrix(eye_v, cam["target"], up_v)
-    w = transform(Vv, (*p, 1.0))
-    return w[0]
+    Pv = proj_matrix(1.0, cam["near"], cam["far"])
+    x, y, _z, w = transform(mat_mul(Pv, Vv), (*p, 1.0))
+    return (x / w, y / w)
+
+
+def screen_x(p, up_v, yaw_v):
+    """The CLIP-space x the first version of this gate used — kept only to show
+    that it does discriminate, so the fix is about the quantity measured, not
+    about a check that could never fail."""
+    eye_v = camera_eye(cam, yaw=yaw_v, pitch=0.0)
+    Vv = view_matrix(eye_v, cam["target"], up_v)
+    return transform(Vv, (*p, 1.0))[0]
+
+
+def axis_displacement(axis, up_v, yaw_v):
+    plus = screen_xy(add(cam["target"], axis), up_v, yaw_v)
+    minus = screen_xy(sub(cam["target"], axis), up_v, yaw_v)
+    return (plus[0] - minus[0], plus[1] - minus[1])
+
 
 north_v = (0.0, 1.0, 0.0)
 east_v = (1.0, 0.0, 0.0)
-x_north = screen_x(add(cam["target"], north_v), (0.0, 0.0, 1.0), 0.0)
-x_east_turned = screen_x(add(cam["target"], east_v), (0.0, 0.0, 1.0), math.pi / 2)
-check("`north` projects to screen right", x_north > 1e-6,
-      f"x={x_north:+.4f}")
-check("after a quarter turn, `east` projects to screen left (handedness pinned)",
-      x_east_turned < -1e-6, f"x={x_east_turned:+.4f}")
+d_north = axis_displacement(north_v, (0.0, 0.0, 1.0), 0.0)
+d_up = axis_displacement((0.0, 0.0, 1.0), (0.0, 0.0, 1.0), 0.0)
+check("`north` moves the image to screen right and not vertically",
+      d_north[0] > 1e-3 and abs(d_north[1]) < 1e-4,
+      f"d=({d_north[0]:+.5f}, {d_north[1]:+.5f})")
+check("`up` moves the image to screen up and not horizontally",
+      d_up[1] > 1e-3 and abs(d_up[0]) < 1e-4,
+      f"d=({d_up[0]:+.5f}, {d_up[1]:+.5f})")
+# The measured magnitude, pinned. A symmetric ±1 mm step about the target is
+# scaled by the perspective divide at the target's own depth: the derivative is
+# `2/(d*tan(halfFov))` over the whole ± range, i.e. `1/(d*tan(halfFov))` per
+# unit. This is the number the Swift test used to demand (1.0) and the gate
+# never checked — which is how the two mirrors drifted apart on a quantity that
+# is not a convention but arithmetic.
+check("the right-axis displacement is the measured 0.141513, not a unit vector",
+      abs(d_north[0] - 0.1415130) < 1e-6,
+      f"d.x={d_north[0]:.7f} (1/dist/tan(halfFov) = "
+      f"{1.0 / cam['distance'] / math.tan(FOV / 2):.7f})")
+
+d_east_turned = axis_displacement(east_v, (0.0, 0.0, 1.0), math.pi / 2)
+x_east_turned_clip = screen_x(add(cam["target"], east_v), (0.0, 0.0, 1.0),
+                              math.pi / 2)
+check("after a quarter turn, `east` moves the image to screen LEFT (handedness pinned)",
+      d_east_turned[0] < -1e-6, f"d.x={d_east_turned[0]:+.5f}")
+
+# Discrimination, not decoration: a MIRRORED basis must fail the very checks
+# above. The first attempt at this flipped the UPPER vector — which is a
+# vertical mirror and of course leaves the horizontal check passing; the gate
+# caught its own author, and the two variants are now separated so each check is
+# shown to bind on its own axis.
+def variant_displacement(axis, mirror_x=False, mirror_y=False):
+    eye_v = camera_eye(cam)
+    f = norm(sub(cam["target"], eye_v))
+    s = norm(cross(f, cam["up"]))
+    t = cross(s, f)
+    if mirror_x:
+        s = mul(s, -1)
+    if mirror_y:
+        t = mul(t, -1)
+    Vv = [s[0], t[0], -f[0], 0, s[1], t[1], -f[1], 0,
+          s[2], t[2], -f[2], 0,
+          -dot(s, eye_v), -dot(t, eye_v), dot(f, eye_v), 1]
+    Pv = proj_matrix(1.0, cam["near"], cam["far"])
+    VP = mat_mul(Pv, Vv)
+    out = []
+    for sign in (1.0, -1.0):
+        p = add(cam["target"], mul(axis, sign))
+        x, y, _z, w = transform(VP, (*p, 1.0))
+        out.append((x / w, y / w))
+    return (out[0][0] - out[1][0], out[0][1] - out[1][1])
+
+
+mirror_d_north = variant_displacement(north_v, mirror_x=True)
+mirror_d_up = variant_displacement((0.0, 0.0, 1.0), mirror_y=True)
+check("a horizontally MIRRORED basis fails the north check (it can discriminate)",
+      not (mirror_d_north[0] > 1e-3),
+      f"mirrored d.x={mirror_d_north[0]:+.5f} vs real {d_north[0]:+.5f}")
+check("a vertically MIRRORED basis fails the up check (it can discriminate)",
+      not (mirror_d_up[1] > 1e-3),
+      f"mirrored d.y={mirror_d_up[1]:+.5f} vs real {d_up[1]:+.5f}")
+
+# And the quantity the gate used to read was not the screen coordinate at all:
+# it was view/clip space BEFORE the divide, which is the screen x multiplied by
+# the clip `w` at the target's depth. The ratio below is that factor. This is
+# why the old sign checks were right and still could not have caught the Swift
+# test's magnitude error: they were reading a different number, one that scales
+# with distance, and were only ever compared against 0.
+# And the quantity the gate used to read was not the screen coordinate at all:
+# it was the VIEW-space x of the view-projection product BEFORE the divide, i.e.
+# the screen x undivided by the clip `w`. Their ratio is fixed by the projection
+# (`ndc.x = (f/aspect) * x_view / w`), so it equals `aspect * depth / f` =
+# `depth * tan(halfFov)` with aspect 1 — a factor of 14 here, not 1. Every old
+# check compared this number against 0, so it was a valid handedness test and
+# could never have caught a magnitude error in either direction.
+clip_x_north = screen_x(add(cam["target"], north_v), (0.0, 0.0, 1.0), 0.0)
+clip_ratio = clip_x_north / (d_north[0] / 2)     # d_north is the ±1 mm span
+expected_ratio = cam["distance"] * math.tan(FOV / 2)
+check("the old clip-space x is the screen x times depth*tan(halfFov), not equal "
+      "to it",
+      abs(clip_ratio - expected_ratio) < 1e-3,
+      f"clip/screen = {clip_ratio:.4f} = distance*tan(halfFov) "
+      f"{expected_ratio:.4f} (a check against 0 said nothing about the screen)")
 
 print()
 print(f"{len(failures)} failure(s)")

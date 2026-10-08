@@ -149,10 +149,27 @@ final class RenderCameraTests: XCTestCase {
 
     /// Which way the image faces. With `up` = +z and yaw = pitch = 0, the eye
     /// sits on +x looking back along -x, so screen-right is `north` and
-    /// screen-up is `up`. Asserting the SIGNS of the projected axes is what
-    /// pins the handedness: reverse it and the image is mirrored, which is a
-    /// defect the symmetric orbit sweep above cannot detect because a mirrored
-    /// frustum is still a valid frustum.
+    /// screen-up is `up`. Asserting the SIGN of the projected axes is what pins
+    /// the handedness: reverse it and the image is mirrored, which is a defect
+    /// the symmetric orbit sweep above cannot detect because a mirrored frustum
+    /// is still a valid frustum.
+    ///
+    /// WHAT IS MEASURED, AND WHY THE FIRST VERSION OF THIS TEST WAS WRONG.
+    /// The original asserted `towardsNorth.x == 1.0` for a point one unit from
+    /// the target, and CI failed with x = 0.2414. Nothing was broken: the sign
+    /// was right, which is the whole claim. The magnitude 1.0 was being asked
+    /// for by confusing two questions — "which way is right?" and "where is the
+    /// edge of the frame?". They are the same question only for an orthographic
+    /// camera; under perspective the offset from the target is foreshortened by
+    /// the distance (10 mm here, so 1 mm of world is not 1 NDC of frame).
+    ///
+    /// So this test now measures the axis DIRECTION at the target, which is
+    /// exactly what pins handedness, and does it with a symmetric difference
+    /// that is independent of the camera's distance: project `target + unit` and
+    /// `target - unit`. A perspective projection maps the target to NDC (0, 0),
+    /// so the two offsets are the exact `-d` and `+d` of the axis's screen
+    /// derivative — positive means the axis points right, and their
+    /// antisymmetry is asserted rather than assumed.
     func testScreenAxesPointTheExpectedWay() {
         let cam = RenderCamera(target: SIMD3(0, 0, 0), distance: 10, yaw: 0,
                                pitch: 0, up: SIMD3(0, 0, 1),
@@ -160,18 +177,47 @@ final class RenderCameraTests: XCTestCase {
         let (east, north) = RenderCamera.basis(forUp: SIMD3(0, 0, 1))
         XCTAssertEqual(north, SIMD3<Float>(0, 1, 0), "basis changed")
         let vp = cam.viewProjection(aspect: 1)
-        let towardsNorth = try! XCTUnwrap(vp.project(cam.target + north))
-        XCTAssertEqual(towardsNorth.x, 1, accuracy: 1e-3,
-                       "a point towards `north` must project to screen right")
-        let towardsUp = try! XCTUnwrap(vp.project(cam.target + SIMD3<Float>(0, 0, 1)))
-        XCTAssertGreaterThan(towardsUp.y, 0,
-                             "a point towards `up` must project to screen up")
+
+        /// Signed screen-x of a unit step along `axis` away from the target.
+        func displacement(_ axis: SIMD3<Float>) -> SIMD2<Float> {
+            let plus = try! XCTUnwrap(vp.project(cam.target + axis))
+            let minus = try! XCTUnwrap(vp.project(cam.target - axis))
+            // The target must sit at the centre of NDC for the two offsets to
+            // be a fair measure of the axis.
+            XCTAssertEqual(plus.x + minus.x, 0, accuracy: 1e-5,
+                           "the target must project to the centre of the frame")
+            XCTAssertEqual(plus.y + minus.y, 0, accuracy: 1e-5,
+                           "the target must project to the centre of the frame")
+            return SIMD2(plus.x - minus.x, plus.y - minus.y)
+        }
+
+        let dNorth = displacement(north)
+        // The magnitude is not decoration. Under perspective a world-space step
+        // is scaled at the target's depth by `1/(distance*tan(halfFov))`, so the
+        // ±1 mm span is `2/(distance*tan(halfFov))` — derived here from the
+        // camera's own fields rather than read back off the projection matrix,
+        // so a wrong projection can still fail this. CI reported 0.24142137 for
+        // the old half-span, and 1/(10*tan(22.5°)) = 0.24142137 exactly: the
+        // number that "failed" was the foreshortening of the step, not a broken
+        // camera.
+        let expectedSpan = 2 / (cam.distance * tanf(cam.verticalFovRadians / 2))
+        XCTAssertEqual(dNorth.x, expectedSpan, accuracy: 1e-4,
+                       "a step towards `north` must move the image to screen "
+                       + "right by the projected step, not by a unit")
+        XCTAssertEqual(dNorth.y, 0, accuracy: 1e-5,
+                       "`north` must not tilt the image vertically")
+
+        let dUp = displacement(SIMD3<Float>(0, 0, 1))
+        XCTAssertEqual(dUp.y, expectedSpan, accuracy: 1e-4,
+                       "a step towards `up` must move the image to screen up")
+        XCTAssertEqual(dUp.x, 0, accuracy: 1e-5,
+                       "`up` must not tilt the image horizontally")
 
         // Note what is NOT asserted here: `east` at yaw 0 is exactly the view
-        // axis, so it projects to x == 0 and cannot say anything about
-        // handedness. Rotate a quarter turn instead — from +north the eye's
-        // `east` lies on the far side and must fall to screen LEFT (measured
-        // -1.0), which is the assertion that actually fails if the cross
+        // axis, so its displacement is ~0 in both components and cannot say
+        // anything about handedness. Rotate a quarter turn instead — from
+        // +north the eye's `east` lies on the far side and must fall to screen
+        // LEFT, which is the assertion that actually fails if the cross
         // products are reversed.
         var turned = cam
         turned.yaw = .pi / 2

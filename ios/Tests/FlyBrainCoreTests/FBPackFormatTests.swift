@@ -34,6 +34,7 @@ final class FBPackFormatTests: XCTestCase {
         let n = NeuronRecord(
             canonicalID: 7, datasetID: 1, type: typeID, region: 9, side: 2,
             transmitter: UInt8(TransmitterType.gabaergic.rawValue), provenance: 4,
+            flags: NeuronFlags.motor,
             morphologyIndex: -1, incomingStart: 0, incomingCount: 0,
             outgoingStart: 0, outgoingCount: 0, x: 1.5, y: -2.5, z: 3.25)
         XCTAssertTrue(c.appendNeuron(n))
@@ -58,6 +59,12 @@ final class FBPackFormatTests: XCTestCase {
         XCTAssertEqual(got.side, 2)
         XCTAssertEqual(got.transmitter, UInt8(TransmitterType.gabaergic.rawValue))
         XCTAssertEqual(got.provenance, 4)
+        // The class byte must survive the Swift writer/reader pair too, not just
+        // the Python one: byte 9 used to be written as a constant 0 and dropped
+        // on read, so a round trip silently erased whatever was there.
+        XCTAssertEqual(got.flags, NeuronFlags.motor)
+        XCTAssertTrue(got.isMotorNeuron)
+        XCTAssertFalse(got.isSensoryNeuron)
         XCTAssertEqual(got.morphologyIndex, -1)
         XCTAssertEqual(got.x, 1.5, accuracy: 1e-6)
         XCTAssertEqual(got.y, -2.5, accuracy: 1e-6)

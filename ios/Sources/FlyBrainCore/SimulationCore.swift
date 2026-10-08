@@ -65,13 +65,32 @@ public final class SimulationCore: @unchecked Sendable {
     public private(set) var dynamics = BodyDynamics()
 
     /// Motor-neuron drive readout from VNC (per leg group + wing + proboscis).
-    private var neuralDrive: [Float] = []
+    /// Per-group motor drive for the current step (leg 0-5). Internal rather than
+    /// private so the readout tests can assert on the command the body receives,
+    /// not just on the composition counters.
+    var neuralDrive: [Float] = []
 
     /// Leg-group firing rate (Hz) at which the drive saturates. INFERRED: a
     /// single explicit reference scale replacing the three inconsistent
     /// implicit ones (0.25-per-spike, /6, /4) that made identical activity
     /// mean different things for legs, wings and proboscis.
     public var motorDriveReferenceHz: Float = 100
+
+    /// Whether the loaded connectome carries a motor-cell label, so the drive
+    /// readout could select motor neurons instead of summing every neuron in
+    /// the neuropil. False for assets written before the class byte existed
+    /// (flags == 0 everywhere), where the readout falls back to region-only.
+    /// Surfaced so the UI can say which of the two it is doing rather than
+    /// implying the stronger claim either way.
+    public private(set) var motorClassified: Bool = false
+
+    /// Last readout's total, and the part of it that came from cells actually
+    /// carrying the motor label. They are equal whenever the asset is read by
+    /// class; they diverge only under the region-only fallback. Exposed for the
+    /// readout tests, which need to see WHICH cells were summed rather than
+    /// just that some number changed.
+    var motorDriveTotalForTesting: Float = 0
+    var motorDriveFromLabelledOnlyForTesting: Float = 0
 
     public init(connectome: Connectome,
                 parameters: SimulationParameters = SimulationParameters()) {
@@ -171,11 +190,50 @@ public final class SimulationCore: @unchecked Sendable {
         //
         // Walking the firing active set keeps this O(active) rather than a
         // sweep of all 153,746 neurons per step.
+        //
+        // MOTOR CELLS ONLY. Region alone is not a motor label: on the real BANC
+        // release the ingest puts 9,954 neurons in legNeuromere of which only 187
+        // (1.9%) are motor — 4,770 of the rest (47.9%) are the sensory afferents that
+        // report tarsal load and joint angle into that same neuromere, plus
+        // local interneurons (tools/measure_motor_readout_composition.py).
+        // Summing all of them makes the "motor command" a sum of the fly's own
+        // sensory input, so it would track the stimulus instead of the motor
+        // output and the closed loop would partly measure its own input.
+        //
+        // Coverage, measured on banc_cns.fbpack: 289 of the release's 805 motor
+        // neurons fall in these three regions; the other 516 sit in
+        // ventralNerveCord / abdominalNeuromere, which the readout does not
+        // consult. So this reads a real subset of the motor pool, not all of
+        // it, and `motorClassified` says only that the selection was by class.
+        //
+        // Assets written before the class byte existed carry flags == 0 for
+        // every neuron. Falling back to region-only in that case keeps such an
+        // asset running exactly as it did; it does not invent a motor label it
+        // does not have.
+        var nMotor = 0
+        var nClassed = 0
+        for idx in engine.firingActiveNeurons {
+            let n = connectome.neurons[Int(idx)]
+            if n.flags != 0 { nClassed += 1 }
+            if n.isMotorNeuron { nMotor += 1 }
+        }
+        let classifyByRegion = (nMotor == 0 && nClassed == 0)
+        var motorDriveTotal: Float = 0
+        var motorDriveFromLabel: Float = 0
         for idx in engine.firingActiveNeurons {
             let rate = engine.rateHz(of: idx)
             guard rate > 0 else { continue }
             let n = connectome.neurons[Int(idx)]
-            switch RegionID(rawValue: Int(n.region)) ?? .unknown {
+            let region = RegionID(rawValue: Int(n.region)) ?? .unknown
+            switch region {
+            case .legNeuromere, .wingNeuropil, .subesophagealZone:
+                if !classifyByRegion && !n.isMotorNeuron { continue }
+            default:
+                continue
+            }
+            motorDriveTotal += rate
+            if n.isMotorNeuron { motorDriveFromLabel += rate }
+            switch region {
             case .legNeuromere:
                 let slot = (n.side == 1 ? 0 : 1) * 3 + (Int(n.type) % 3)
                 if slot < drive.count { drive[slot] += rate }
@@ -187,6 +245,9 @@ public final class SimulationCore: @unchecked Sendable {
                 break
             }
         }
+        motorDriveTotalForTesting = motorDriveTotal
+        motorDriveFromLabelledOnlyForTesting = motorDriveFromLabel
+        motorClassified = !classifyByRegion
         // The raw rate is in Hz and the CPG expects a normalised drive. There
         // were three competing implicit scales (0.25 per spike, a /6 and a /4
         // denominator) so the same activity meant different things per group.

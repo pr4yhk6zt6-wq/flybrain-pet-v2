@@ -23,6 +23,14 @@ public struct NeuronRecord {
     public var side: UInt8             // 0=center,1=left,2=right
     public var transmitter: UInt8      // TransmitterType raw
     public var provenance: UInt8       // Provenance raw
+    /// Cell-class flags (wire byte 9, formerly reserved). Carries whether the
+    /// cell is a MOTOR neuron, which the region byte alone cannot express: the
+    /// real BANC release puts motor neurons, the sensory afferents that report
+    /// into the same neuromere, and local interneurons all inside
+    /// `legNeuromere` (measured: only 1.9% of that region's 9,954 neurons are
+    /// motor). A readout that keys on region alone therefore sums its own
+    /// sensory input.
+    public var flags: UInt8
     public var morphologyIndex: Int32  // -1 = none
     public var incomingStart: Int32
     public var incomingCount: Int32
@@ -32,8 +40,14 @@ public struct NeuronRecord {
     public var y: Float
     public var z: Float
 
+    /// True when the release labelled this cell a motor neuron.
+    public var isMotorNeuron: Bool { flags & NeuronFlags.motor != 0 }
+    /// True when the release labelled this cell a sensory (afferent) neuron.
+    public var isSensoryNeuron: Bool { flags & NeuronFlags.sensory != 0 }
+
     public init(canonicalID: Int32, datasetID: UInt8, type: UInt16, region: UInt8,
                 side: UInt8, transmitter: UInt8, provenance: UInt8,
+                flags: UInt8 = 0,
                 morphologyIndex: Int32, incomingStart: Int32, incomingCount: Int32,
                 outgoingStart: Int32, outgoingCount: Int32,
                 x: Float, y: Float, z: Float) {
@@ -44,6 +58,7 @@ public struct NeuronRecord {
         self.side = side
         self.transmitter = transmitter
         self.provenance = provenance
+        self.flags = flags
         self.morphologyIndex = morphologyIndex
         self.incomingStart = incomingStart
         self.incomingCount = incomingCount
@@ -51,6 +66,15 @@ public struct NeuronRecord {
         self.outgoingCount = outgoingCount
         self.x = x; self.y = y; self.z = z
     }
+}
+
+/// Bits of `NeuronRecord.flags` (wire byte 9).
+public enum NeuronFlags {
+    /// The release's `Super Class` is `motor`. MEASURED, not inferred.
+    public static let motor: UInt8 = 1 << 0
+    /// The release's `Super Class` is `sensory` / `sensory_ascending` /
+    /// `sensory_descending`. MEASURED, not inferred.
+    public static let sensory: UInt8 = 1 << 1
 }
 
 /// Synapse/edge record (spec #7). `estimatedEfficacy` is ALWAYS INFERRED —
@@ -369,12 +393,13 @@ public final class Connectome: @unchecked Sendable {
 
     private func appendNeuronRecord(_ n: NeuronRecord, to d: inout Data) {
         // v2 layout: i32 id; u8 datasetID,region,side,transmitter,provenance;
-        // u8 flags; u16 type; i32 morphology/in-out starts+counts; 3×f32.
+        // u8 flags (cell class: motor/sensory); u16 type; i32 morphology/
+        // in-out starts+counts; 3×f32.
         appendI32(n.canonicalID, to: &d)
         appendU8(n.datasetID, to: &d)
         appendU8(n.region, to: &d); appendU8(n.side, to: &d)
         appendU8(n.transmitter, to: &d); appendU8(n.provenance, to: &d)
-        appendU8(0, to: &d)                               // flags (reserved)
+        appendU8(n.flags, to: &d)                         // cell class (motor/sensory)
         appendU16(n.type, to: &d)
         appendI32(n.morphologyIndex, to: &d)
         appendI32(n.incomingStart, to: &d); appendI32(n.incomingCount, to: &d)
@@ -489,13 +514,17 @@ public final class Connectome: @unchecked Sendable {
             let n = NeuronRecord(
                 canonicalID: i32(0), datasetID: u8(4), type: u16(10), region: u8(5),
                 // v2 field order after `region` is side, transmitter, provenance,
-                // then a reserved flags byte, then the u16 type. The reader used
+                // then the flags byte, then the u16 type. The reader used
                 // to take type from offset 6 and wind side/transmitter/provenance
                 // back by one, so on EVERY asset it returned a bogus type
                 // (e.g. 770 instead of 4660) plus the wrong side, transmitter and
                 // provenance — both writers (flybrain/pack.py, packNeuronRecord)
                 // put them at 6/7/8 with type at 10.
                 side: u8(6), transmitter: u8(7), provenance: u8(8),
+                // Byte 9 used to be dropped on read ("reserved"), so whatever
+                // the packer wrote there was lost. It now carries the
+                // motor/sensory cell class, which the region byte cannot.
+                flags: u8(9),
                 morphologyIndex: i32(12), incomingStart: i32(16), incomingCount: i32(20),
                 outgoingStart: i32(24), outgoingCount: i32(28),
                 x: f32(32), y: f32(36), z: f32(40))

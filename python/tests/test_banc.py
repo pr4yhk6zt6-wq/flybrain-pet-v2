@@ -394,3 +394,45 @@ def test_transmitter_enum_matches_the_shared_vocabulary():
     assert transmitter_enum("acetylcholine") == int(TransmitterType.CHOLINERGIC)
     assert transmitter_enum("gaba") == int(TransmitterType.GABAERGIC)
     assert transmitter_enum("") == int(TransmitterType.UNKNOWN)
+
+def test_cell_class_flags_are_shared_between_pid_and_pack():
+    # `pid` cannot import `pack` (pack imports pid), so the flag byte values are
+    # stated in both. Pin them against each other: a drift here would make the
+    # simulator select on a bit nobody wrote, which reads as "no motor neurons"
+    # and silently falls back to summing whole neuropils.
+    from flybrain import pack as pack_mod
+    from flybrain import pid as pid_mod
+    assert pid_mod.FLAG_MOTOR == pack_mod.FLAG_MOTOR
+    assert pid_mod.FLAG_SENSORY == pack_mod.FLAG_SENSORY
+
+
+def test_neuron_flags_follow_the_release_super_class():
+    from flybrain.pack import FLAG_MOTOR, FLAG_SENSORY, neuron_flags
+    # The release's own labels, including the compound sensory super classes.
+    assert neuron_flags("motor") == FLAG_MOTOR
+    assert neuron_flags("sensory") == FLAG_SENSORY
+    assert neuron_flags("sensory_ascending") == FLAG_SENSORY
+    assert neuron_flags("sensory_descending") == FLAG_SENSORY
+    assert neuron_flags("central_brain_intrinsic") == 0
+    assert neuron_flags("") == 0
+    # `motor` must NOT also read as sensory — the release gives one label, and
+    # a cell that is both would let the readout pick up its own input.
+    assert not (neuron_flags("motor") & FLAG_SENSORY)
+
+
+def test_flags_land_on_the_wire_at_offset_9():
+    # The whole point of the byte: it must be the NEURON record's offset 9, the
+    # slot between provenance (8) and the u16 type (10).
+    from flybrain.pid import build_synthetic_demo, DatasetID, NeuronRecord
+    from flybrain.pack import FLAG_MOTOR, FLAG_SENSORY, _neuron_bytes
+    rec = NeuronRecord(canonicalID=1, datasetID=DatasetID.SYNTHETIC, type=7,
+                       region=3, side=1, transmitter=2, provenance=1,
+                       morphologyIndex=-1, incomingStart=0, incomingCount=0,
+                       outgoingStart=0, outgoingCount=0, x=1.0, y=2.0, z=3.0,
+                       flags=FLAG_MOTOR | FLAG_SENSORY)
+    b = _neuron_bytes(rec)
+    assert len(b) == 44
+    assert b[9] == (FLAG_MOTOR | FLAG_SENSORY)
+    # and the neighbours are untouched
+    assert struct.unpack_from("<H", b, 10)[0] == 7
+    assert b[8] == 1

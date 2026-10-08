@@ -119,6 +119,16 @@ struct TelemetryStrip: View {
             Text("spikes/s \(String(format: "%.0f", engine.spikesPerSecond))   "
                  + "events \(engine.pendingEventCount)")
                 .font(.caption.monospaced())
+            // Which motor neurons the drive is read from. Assets written before
+            // the cell-class byte existed carry no class, and the readout then
+            // falls back to summing every neuron in the neuropil — which on the
+            // real BANC release is 98.1% sensory/interneuron, not motor. Say
+            // which of the two is happening rather than implying the stronger.
+            Text(core.motorClassified
+                 ? "motor drive: from motor-labelled cells"
+                 : "motor drive: region only (asset has no cell class)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(core.motorClassified ? Color.secondary : Color.orange)
         }
         .padding(8)
         .background(.ultraThinMaterial)

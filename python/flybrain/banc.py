@@ -51,6 +51,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import pack
 from .neuropil import NT_TAG_MAP, map_neuropil, strip_side
 from .pid import (ConnectomeHeader, DatasetID, NeuronRecord, OutEdgeRange,
                   Provenance, RegionBounds, RegionID, TransmitterType)
@@ -486,6 +487,13 @@ def build_banc_asset(data_dir: Path,
             side=side,
             transmitter=transmitter_enum(nt_tag),
             provenance=int(Provenance.RECONSTRUCTED),
+            # Cell class from the release's own `Super Class` label. This is
+            # MEASURED, unlike `region` (a reduction of an atlas tag), and it is
+            # what lets the motor readout at runtime tell a leg motor neuron
+            # from the sensory afferent sitting in the same neuromere: the
+            # ingest puts 4,770 sensory cells and 187 motor cells into
+            # legNeuromere, so a region-only readout would sum its own input.
+            flags=pack.neuron_flags(super_class),
             morphologyIndex=-1,
             incomingStart=0, incomingCount=0,
             outgoingStart=0, outgoingCount=0,

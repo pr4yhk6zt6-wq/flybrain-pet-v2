@@ -16,6 +16,11 @@ NeuronRecord (44): i32 canonicalID; u8 datasetID,region,side,transmitter,
      provenance 8, flags 9, type 10, morphology 12, in 16/20, out 24/28,
      x 32, y 36, z 40 — pinned by python/tests/test_banc.py)
 
+`flags` was reserved and dropped on read; it now carries the MEASURED
+cell class (FLAG_MOTOR / FLAG_SENSORY from the release's `Super Class`),
+because `region` alone cannot tell a motor neuron from the sensory afferent
+sitting in the same neuromere.
+
 The cell-type field is u16, not u8: the real BANC release carries 11,566
 distinct cell types, which a u8 vocabulary would silently alias into 256
 buckets. The two pad bytes that used to follow provenance now hold the high
@@ -39,11 +44,34 @@ from pathlib import Path
 from .pid import ConnectomeHeader, NeuronRecord, OutEdgeRange, RegionBounds, SynapseRecord
 
 
+# Cell-class bits on the wire (NeuronRecord.flags, byte 9). These are MEASURED
+# from the release's `Super Class` column, unlike `region`, which is a reduction
+# of an atlas tag. The simulator's motor readout needs them because a neuropil
+# like the leg neuromere contains motor neurons, the sensory afferents that
+# report into it, and local interneurons all at once (measured: only 1.9% of
+# the 9,954 neurons the ingest assigns to legNeuromere are motor).
+FLAG_MOTOR = 1 << 0
+FLAG_SENSORY = 1 << 1
+
+_SENSORY_SUPER_CLASSES = {"sensory", "sensory_ascending", "sensory_descending"}
+
+
+def neuron_flags(super_class: str) -> int:
+    """Cell-class bits from the release's own `Super Class` label."""
+    sc = (super_class or "").strip().lower()
+    flags = 0
+    if sc == "motor":
+        flags |= FLAG_MOTOR
+    if sc in _SENSORY_SUPER_CLASSES:
+        flags |= FLAG_SENSORY
+    return flags
+
+
 def _neuron_bytes(n: NeuronRecord) -> bytes:
     return struct.pack(
         "<iBBBBBBHiiiii3f",
         n.canonicalID, n.datasetID, n.region, n.side,
-        n.transmitter, n.provenance, 0, n.type,
+        n.transmitter, n.provenance, getattr(n, "flags", 0) or 0, n.type,
         n.morphologyIndex, n.incomingStart, n.incomingCount,
         n.outgoingStart, n.outgoingCount,
         n.x, n.y, n.z,

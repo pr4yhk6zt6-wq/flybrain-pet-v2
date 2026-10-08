@@ -50,7 +50,7 @@ final class WorldTests: XCTestCase {
     }
 
     func testSceneIntegratesIntoClosedLoop() {
-        // KNOWN FAILURE, recorded deliberately rather than deleted.
+        // The sensory->motor arc, asserted as a falsifiable claim.
         //
         // This test used to assert only `engine.spikeCount > 0` and
         // `position.x >= 0`, against `regionalConnectome` — a fixture whose
@@ -58,33 +58,27 @@ final class WorldTests: XCTestCase {
         // the sensory region and the sensory->motor path does not exist in it.
         // The position assertion was vacuous: the fly is spawned at x = 0.
         //
-        // Strengthening it into a falsifiable claim (below) exposed a real bug
-        // that the old assertions could not see. With the body settled first,
-        // so that gravity transients are excluded from the measurement:
+        // Strengthening it exposed a real bug, and the bug was in the OTHER
+        // fixture, not in the brain. `closedLoopConnectome`'s `wire()` helper
+        // overwrote a neuron's outgoing range when that neuron had a second
+        // edge, so `wire(23, 24)` (central complex -> leg pool) was erased by
+        // `wire(23, 28)` (central complex -> wing pool). The leg pool was
+        // unreachable, the motor command stayed exactly 0.0 while the spike
+        // count rose fourfold with odour, and the body's displacement was
+        // identical with and without stimulus. `Connectome.validate()` names
+        // this exactly ("synapse k referenced by 0 neurons"), which is why the
+        // first thing below is to call it.
         //
+        // The measured symptom, on the broken fixture:
         //   odour | spikes | walkDrive | forwardSpeedTarget | locomotion
         //   ------+--------+-----------+-------------------+-----------
         //      0  |   550  |    0.0    |        0.0        | 0.5286 mm
         //      4  |   885  |    0.0    |        0.0        | 0.5286 mm
-        //   ------+--------+-----------+-------------------+-----------
-        //      0  |  1010  |    0.0    |        0.0        | 1.8717 mm
-        //      4  |  2450  |    0.0    |        0.0        | 1.8717 mm
         //
-        // Fourfold more spikes changes the body's motion by exactly nothing,
-        // and the motor command is zero throughout. The displacement is a
-        // drive-independent artifact (physics settling plus a constant lateral
-        // target), not locomotion: the brain does not currently drive the legs.
-        // So the closed loop asserted by this test's NAME does not exist yet.
-        //
-        // The expectations are therefore marked failed, with `strict: true` so
-        // that FIXING the bug turns CI red and forces this marker to be removed
-        // — the assertion set stays the oracle, it is just not satisfied.
-        XCTExpectFailure("""
-            The motor command carries no neural drive: walkDrive and \
-            forwardSpeedTarget are 0 regardless of spike count, and the body's \
-            displacement is identical with and without odour. The sensory->motor \
-            loop is not closed.
-            """, strict: true)
+        // With the fixture fixed the command tracks the input and the fly moves
+        // only when it is stimulated. `tools/verify_closed_loop_fixture.py`
+        // gates the fixture itself (43 edges emitted, both motor pools
+        // reachable) and fails on the pre-fix wiring.
         func darkWorld(odorEmission: Float) -> World {
             let w = World()
             w.backgroundLuminance = 0
@@ -119,6 +113,13 @@ final class WorldTests: XCTestCase {
 
         let closed = TestSupport.closedLoopConnectome()
         let regional = TestSupport.regionalConnectome(neuronsPerRegion: 10)
+
+        // The fixture must be well formed BEFORE anything is concluded from it.
+        // `validate()` checks that every synapse is owned by exactly one neuron,
+        // which is the invariant the old `wire()` violated. Without this the
+        // suite happily measured a connectome that was not the one described.
+        XCTAssertEqual(closed.validate(), [],
+                       "the closed-loop fixture is not a valid connectome")
 
         let short = run(connectome: closed, odorEmission: 4, steps: 1500)
         let long = run(connectome: closed, odorEmission: 4, steps: 4000)

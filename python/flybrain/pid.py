@@ -12,6 +12,13 @@ from __future__ import annotations
 
 import enum
 
+# Cell-class bits live with the packer (pack.py) and pid is imported BY pack,
+# so the constants are re-stated here as plain byte values to avoid a circular
+# import. `python/tests/test_banc.py` pins them against pack.py's definitions,
+# so the duplication cannot drift silently.
+FLAG_MOTOR = 1 << 0
+FLAG_SENSORY = 1 << 1
+
 # --------------------------------------------------------------------------
 # Provenance taxonomy (spec #3, #28, #60)
 # --------------------------------------------------------------------------
@@ -98,13 +105,13 @@ class NeuronRecord:
         "canonicalID", "datasetID", "type", "region", "side",
         "transmitter", "provenance", "morphologyIndex",
         "incomingStart", "incomingCount", "outgoingStart", "outgoingCount",
-        "x", "y", "z",
+        "x", "y", "z", "flags",
     )
 
     def __init__(self, canonicalID, datasetID, type, region, side,
                  transmitter, provenance, morphologyIndex,
                  incomingStart, incomingCount, outgoingStart, outgoingCount,
-                 x, y, z):
+                 x, y, z, flags=0):
         self.canonicalID = int(canonicalID)
         self.datasetID = int(datasetID)
         self.type = int(type)
@@ -112,6 +119,7 @@ class NeuronRecord:
         self.side = int(side)
         self.transmitter = int(transmitter)
         self.provenance = int(provenance)
+        self.flags = int(flags)
         self.morphologyIndex = int(morphologyIndex)
         self.incomingStart = int(incomingStart)
         self.incomingCount = int(incomingCount)
@@ -268,6 +276,29 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
         (RegionID.ABDOMINAL_NEUROMERE, RegionID.ENDOCRINE_VISCERAL, +1, TransmitterType.PEPTIDERGIC, (1, 2)),
     ]
 
+    # Cell class, following the release's own `Super Class` semantics so the
+    # synthetic asset exercises the same code path as the real one: afferents
+    # are sensory, the neuromeres and VNC that drive muscles are motor, the
+    # rest carries no class. Without this every demo neuron reads flags == 0
+    # and the test that pins the class byte (FBPackCrossLanguageTests) would
+    # compare two zeroes and pass without testing anything.
+    _SENSORY = {
+        RegionID.RETINA_LEFT, RegionID.RETINA_RIGHT, RegionID.LAMINA,
+        RegionID.MEDULLA, RegionID.LOBULA, RegionID.LOBULA_PLATE,
+        RegionID.ANTENNAL_LOBE, RegionID.HALTERE_NEUROPIL,
+    }
+    _MOTOR = {
+        RegionID.VENTRAL_NERVE_CORD, RegionID.LEG_NEUROMERE,
+        RegionID.WING_NEUROPIL, RegionID.ABDOMINAL_NEUROMERE,
+    }
+
+    def _class_flags(region) -> int:
+        if region in _SENSORY:
+            return FLAG_SENSORY
+        if region in _MOTOR:
+            return FLAG_MOTOR
+        return 0
+
     neurons: list[NeuronRecord] = []
     synapses: list[SynapseRecord] = []
     region_ranges: dict[int, tuple[int, int]] = {}
@@ -285,6 +316,7 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
                 transmitter=int(TransmitterType.CHOLINERGIC) if region not in (
                     RegionID.MUSHROOM_BODY, RegionID.CENTRAL_COMPLEX) else int(TransmitterType.GABAERGIC),
                 provenance=int(Provenance.INFERRED),
+                flags=_class_flags(region),
                 morphologyIndex=-1,
                 incomingStart=0, incomingCount=0,
                 outgoingStart=0, outgoingCount=0,

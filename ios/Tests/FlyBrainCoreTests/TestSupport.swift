@@ -9,6 +9,47 @@ import Foundation
 @testable import FlyBrainCore
 
 enum TestSupport {
+    /// Two neurons in the SAME neuropil, differing only in cell class.
+    ///
+    /// Exists so the readout test can show that selection is by class and not
+    /// by region: both neurons are `legNeuromere`, so a region-only readout
+    /// cannot tell them apart. On the real release that region is 1.9% motor
+    /// and 47.9% sensory, which is why the distinction has to be testable.
+    static func pairedClassConnectome(motorFlags: UInt8,
+                                      sensoryFlags: UInt8) -> Connectome {
+        let header = ConnectomeHeader(
+            magic: 0x46425031, version: 2, flags: 0,
+            neuronCount: 2, synapseCount: 0,
+            morphologyCount: 0, regionCount: 0,
+            organism: OrganismInfo(datasetVersion: "test",
+                                   simulatorVersion: "test",
+                                   parameterProfile: "test"),
+            sourceDatasets: ["synthetic-test"],
+            dataProvenance: "SYNTHETIC-DEMO",
+            generationDate: "now", generatedBy: "TestSupport",
+            description: "paired cell class")
+        let c = Connectome(header: header)
+        c.appendNeuron(NeuronRecord(
+            canonicalID: 0, datasetID: 0, type: 1,
+            region: UInt8(RegionID.legNeuromere.rawValue), side: 1,
+            transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+            provenance: 0, flags: motorFlags, morphologyIndex: -1,
+            incomingStart: 0, incomingCount: 0,
+            outgoingStart: 0, outgoingCount: 0,
+            x: 0, y: 0, z: 0))
+        c.appendNeuron(NeuronRecord(
+            canonicalID: 1, datasetID: 0, type: 2,
+            region: UInt8(RegionID.legNeuromere.rawValue), side: 1,
+            transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+            provenance: 0, flags: sensoryFlags, morphologyIndex: -1,
+            incomingStart: 0, incomingCount: 0,
+            outgoingStart: 0, outgoingCount: 0,
+            x: 0, y: 0, z: 0))
+        c.setOutgoingRanges([OutEdgeRange(start: 0, count: 0),
+                             OutEdgeRange(start: 0, count: 0)])
+        return c
+    }
+
     /// Index of a provenance case in allCases (storage format for UInt8).
     static func provIndex(_ p: Provenance) -> UInt8 {
         UInt8(Provenance.allCases.firstIndex(of: p) ?? 0)
@@ -181,6 +222,13 @@ extension TestSupport {
     /// sensory→motor path does not exist there: a test asserting the animal
     /// "moved" against that fixture is asserting nothing, which is what
     /// `WorldTests.testSceneIntegratesIntoClosedLoop` was doing.
+    /// Deterministic closed-loop fixture: sensory regions -> medulla -> central
+    /// complex -> leg/wing motor pools, plus a self-sustaining motor pool.
+    ///
+    /// Builds REAL region labels and a REAL multi-hop path out of the sensory
+    /// region, unlike `regionalConnectome` whose chains are cut at every region
+    /// boundary (so its "closed loop" test could only ever prove that nothing
+    /// moved).
     static func closedLoopConnectome(efficacy: Float = 2) -> Connectome {
         let regions: [RegionID] = [
             .retinaLeft, .retinaRight, .lamina, .antennalLobe,
@@ -226,16 +274,23 @@ extension TestSupport {
         // assertion that the fly "moved" passes only because it never moved.
         // 2.0 was calibrated in mirrors (tools/sim_closed_loop.py) — 1.5 is the
         // measured onset of propagation in this 4-neuron-per-region fixture.
-        func wire(_ from: Int32, _ to: Int32) {
-            let start = Int32(synapses.count)
-            synapses.append(SynapseRecord(
-                preNeuron: from, postNeuron: to, synapseCount: 100,
-                transmitter: UInt8(TransmitterType.cholinergic.rawValue),
-                sign: Int8(SynapseSign.excitatory.rawValue),
-                confidence: 50, delaySteps: 1,
-                estimatedEfficacy: efficacy))
-            outgoing[Int(from)] = OutEdgeRange(start: start, count: 1)
-        }
+        // A neuron may have SEVERAL outgoing edges — the brain→motor fan-out gives
+        // neuron 23 edges to both the leg and the wing pool, and the motor pool
+        // has a two-way pair. Overwriting `outgoing[start]` on each call silently
+        // dropped one of them, so the leg pool became UNREACHABLE (and
+        // `Connectome.validate()` reports it as "referenced by 0 neurons").
+        // The symptom was not a crash: the motor command stayed exactly 0 while
+        // the spike count rose fourfold with odour, and the body's displacement
+        // was identical with and without stimulus — the "loop" this fixture is
+        // named after did not exist in it.
+        //
+        // Collect the edge SET first, then emit it grouped by presynaptic
+        // neuron. The CSR format requires every neuron's outgoing edges to be
+        // one contiguous run, so emitting in the order the connections are
+        // described would interleave neurons and produce ranges that point at
+        // another neuron's edges.
+        var edges: [(from: Int32, to: Int32)] = []
+        func wire(_ from: Int32, _ to: Int32) { edges.append((from, to)) }
 
         // intra-region relay chain (i → i+1). A region with no internal relay
         // cannot carry a signal from its input neuron to its output neuron, so
@@ -265,6 +320,23 @@ extension TestSupport {
             guard let ids = indexOfRegion[m] else { continue }
             wire(ids[0], ids[1])
             wire(ids[1], ids[0])
+        }
+
+        // Emit grouped by presynaptic neuron (ascending), so each neuron's run
+        // is contiguous and `synapses[k].preNeuron` matches its owner — the
+        // invariant `Connectome.validate()` checks.
+        for from in Int32(0)..<pid {
+            let mine = edges.filter { $0.from == from }
+            let start = Int32(synapses.count)
+            for e in mine {
+                synapses.append(SynapseRecord(
+                    preNeuron: e.from, postNeuron: e.to, synapseCount: 100,
+                    transmitter: UInt8(TransmitterType.cholinergic.rawValue),
+                    sign: Int8(SynapseSign.excitatory.rawValue),
+                    confidence: 50, delaySteps: 1,
+                    estimatedEfficacy: efficacy))
+            }
+            outgoing[Int(from)] = OutEdgeRange(start: start, count: Int32(mine.count))
         }
 
         let header = ConnectomeHeader(

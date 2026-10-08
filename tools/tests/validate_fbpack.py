@@ -60,6 +60,23 @@ def main() -> int:
     org = hdr.get("organism", {})
     if org.get("sex") != "female":
         problems.append("organism must default to adult female (spec #1)")
+    # Neuron flags (wire byte 9): the cell class the motor readout selects on.
+    # Only the two known bits may appear, and a cell cannot be both a motor
+    # neuron and a sensory afferent — the release's `Super Class` is one label.
+    FLAG_MOTOR, FLAG_SENSORY = 1 << 0, 1 << 1
+    nb = blocks["neuron"]
+    n_motor = n_sensory = n_other = 0
+    for i in range(n_neurons):
+        f = nb[i * STRIDE["neuron"] + 9]
+        if f & ~(FLAG_MOTOR | FLAG_SENSORY):
+            problems.append(f"neuron {i}: unknown flag bits 0x{f:02x}")
+            break
+        if (f & FLAG_MOTOR) and (f & FLAG_SENSORY):
+            problems.append(f"neuron {i}: motor and sensory at once")
+            break
+        n_motor += bool(f & FLAG_MOTOR)
+        n_sensory += bool(f & FLAG_SENSORY)
+        n_other += not f
     if problems:
         print("INVALID:")
         for p in problems:
@@ -69,6 +86,7 @@ def main() -> int:
           f"{n_rng} ranges, {n_reg} regions")
     print(f"  organism: {org.get('species')} ({org.get('sex')}, {org.get('lifeStage')})")
     print(f"  provenance: {hdr.get('dataProvenance')}")
+    print(f"  cell class: motor {n_motor}, sensory {n_sensory}, unlabelled {n_other}")
     return 0
 
 

@@ -87,4 +87,68 @@ final class FBPackCrossLanguageTests: XCTestCase {
         let nonZero = c.neurons.contains { $0.x != 0 || $0.y != 0 || $0.z != 0 }
         XCTAssertTrue(nonZero, "positions must not all be the origin")
     }
+
+    /// The cell-class byte (wire offset 9) must survive Python -> Swift.
+    ///
+    /// This is the field the motor readout selects on, and the region byte
+    /// cannot substitute for it: the ingest assigns 9,954 neurons to
+    /// `legNeuromere` of which only 187 (1.9%) are motor, so summing a
+    /// neuropil sums the fly's own sensory afferents.
+    ///
+    /// The offset is pinned by construction, not by reading the file back with
+    /// the reader under test: byte 9 is what the PACKER wrote and the reader
+    /// must decode THAT byte, not agree with itself.
+    func testPipelineAssetCarriesMotorCellClass() throws {
+        let url = try pipelineAssetURL()
+        // Locate the neuron block independently of the loader.
+        let blob = try Data(contentsOf: url)
+        var off = 0
+        func u64(_ at: Int) -> Int {
+            var v: UInt64 = 0
+            // Little-endian, assembled byte by byte: no alignment requirement
+            // and no API availability question across toolchains.
+            for k in 0..<8 {
+                v |= UInt64(blob[at + k]) << (8 * UInt64(k))
+            }
+            return Int(v)
+        }
+        let hdrLen = u64(0)
+        // `hdrLen` counts the PADDED header, exactly as the loader's
+        // `readBlockBytes()` sees it, so the neuron block starts right after.
+        off = 8 + hdrLen
+        let neuronBytes = u64(off)
+        off += 8
+        let stride = 44
+        let count = neuronBytes / stride
+        XCTAssertGreaterThan(count, 0)
+        // Count the class bits straight out of the file.
+        var rawMotor = 0
+        var rawSensory = 0
+        for i in 0..<count where (blob[off + i * stride + 9] & NeuronFlags.motor) != 0 {
+            rawMotor += 1
+        }
+        for i in 0..<count where (blob[off + i * stride + 9] & NeuronFlags.sensory) != 0 {
+            rawSensory += 1
+        }
+        let c = try Connectome.loadFBPack(from: url)
+        let decodedMotor = c.neurons.reduce(0) { $0 + ($1.isMotorNeuron ? 1 : 0) }
+        let decodedSensory = c.neurons.reduce(0) { $0 + ($1.isSensoryNeuron ? 1 : 0) }
+        XCTAssertEqual(decodedMotor, rawMotor,
+                       "the reader must decode byte 9, not a different offset")
+        XCTAssertEqual(decodedSensory, rawSensory,
+                       "sensory class must survive too")
+        // The committed fixture MUST carry classes, or this test compares two
+        // zeroes and proves nothing. `tools/gen_synth.py` labels the synthetic
+        // demo the same way the BANC ingest labels the real release (afferents
+        // sensory, neuromeres/VNC motor), and `tools/sync_test_asset.py --check`
+        // fails in CI if the fixture drifts from the pipeline asset.
+        XCTAssertGreaterThan(rawMotor, 0,
+                             "the fixture must carry motor cells; regenerate it "
+                             + "with tools/gen_synth.py rather than deleting this")
+        XCTAssertGreaterThan(rawSensory, 0,
+                             "the fixture must carry sensory cells")
+        // Motor and sensory are exclusive, as in the release's single label.
+        XCTAssertEqual(decodedMotor + decodedSensory,
+                       c.neurons.reduce(0) { $0 + ($1.flags != 0 ? 1 : 0) })
+    }
 }

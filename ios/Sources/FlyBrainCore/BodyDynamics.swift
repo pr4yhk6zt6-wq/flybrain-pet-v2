@@ -42,6 +42,14 @@ public struct PhysicsParameters: Sendable {
     /// own size.
     public var bodyLengthMm: Float = 2.5
 
+    /// Time constant (ms) with which the wings reach a commanded stroke.
+    /// INFERRED. Muscle is slower than nerve, so the realised stroke trails the
+    /// command over tens of milliseconds. It is NOT calibrated against a
+    /// measured wing-step response; it exists so that the wing's motion and the
+    /// motor command are distinguishable, which is what lets a strain receptor
+    /// on the wing measure something other than an efference copy.
+    public var strokeActuatorTauMs: Float = 15
+
     /// Traction gain of the planted legs: force per unit of speed error
     /// (nN per mm/s). APPROXIMATED. The legs are modelled as a
     /// traction-limited force source, NOT as an articulated chain: the tarsus
@@ -258,6 +266,31 @@ public struct BodyDynamics: Sendable {
     /// Body orientation as a quaternion (x, y, z, w) for rendering.
     public var bodyQuaternion: SIMD4<Float> { body.orientation }
 
+    // MARK: Wing stroke actuator — the wing is not the command
+
+    /// What the wings are ACTUALLY doing, which is not what they were told to
+    /// do: the actuator has a time constant, muscle cannot change stroke
+    /// amplitude instantly, and during a manoeuvre the commanded and realised
+    /// strokes differ for tens of ms. A wing-strain receptor measures the wing,
+    /// so these are the fields a strain channel must read. Reading the motor
+    /// command instead makes the "sensor" a copy of the efference — feedback
+    /// wired out of the output rather than out of the physics. Measured tip
+    /// speed is the strain proxy: the once-per-stroke load the campaniform
+    /// fields at the wing base report scales with the square of the wing
+    /// velocity, so their firing follows the tip speed.
+    public private(set) var measuredStrokeAmplitude: Float = 0
+    public private(set) var measuredStrokeFrequency: Float = 0
+    public private(set) var measuredWingTipSpeed: Float = 0
+
+    /// Drop the wings back to rest. Derived state tied to the pose, so a
+    /// teleport re-derives it: the wings were not beating at the new place.
+    public mutating func resetWingActuatorState() {
+        measuredStrokeAmplitude = 0
+        measuredStrokeFrequency = 0
+        measuredWingTipSpeed = 0
+        lastWingTipSpeed = 0
+    }
+
     /// Simulation time accumulated by the body clock (ms). Advanced only in
     /// `step`, so it is the body's own time base, not the neural step count.
     public private(set) var elapsedMs: Float = 0
@@ -390,9 +423,24 @@ public struct BodyDynamics: Sendable {
         }
 
         // ---- 2. Wings: lift/drag from actual stroke kinematics -----------
-        let tipSpeed = BodyDynamics.wingTipSpeed(amplitude: command.wingStrokeAmplitude,
-                                                 frequencyHz: command.wingStrokeFrequency,
-                                                 wingLengthMm: p.wingLengthMm)
+        // The airborne force uses the MEASURED stroke, not the commanded one:
+        // the wings cannot snap to a new amplitude, so a manoeuvre command
+        // takes effect over `strokeActuatorTauMs` instead of in one step. This
+        // is also the state the wing-strain channel reads, so that channel
+        // measures the wing rather than eavesdropping on the motor command.
+        let alpha = min(1, dt * 1000 / max(p.strokeActuatorTauMs, 1e-3))
+        measuredStrokeAmplitude += (command.wingStrokeAmplitude - measuredStrokeAmplitude) * alpha
+        measuredStrokeFrequency += (command.wingStrokeFrequency - measuredStrokeFrequency) * alpha
+        // Stroke frequency and amplitude cannot be negative; a body told to
+        // beat backwards is still beating.
+        measuredStrokeAmplitude = max(0, measuredStrokeAmplitude)
+        measuredStrokeFrequency = max(0, measuredStrokeFrequency)
+        measuredWingTipSpeed = BodyDynamics.wingTipSpeed(
+            amplitude: measuredStrokeAmplitude,
+            frequencyHz: measuredStrokeFrequency,
+            wingLengthMm: p.wingLengthMm)
+
+        let tipSpeed = measuredWingTipSpeed
         lastWingTipSpeed = tipSpeed
         var lift: Float = 0
         var thrust: Float = 0

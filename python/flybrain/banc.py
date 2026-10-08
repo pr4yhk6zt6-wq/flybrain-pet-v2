@@ -479,10 +479,25 @@ def build_banc_asset(data_dir: Path,
 
         ctype = (row.get("Primary Cell Type") or row.get("Class") or
                  row.get("Super Class") or "unclassified").strip()
+        # `type` is the cell-type vocabulary index (see `type_ids` above).
+        # Measured on the committed asset: 11,528 distinct values spanning
+        # 0..11,565, i.e. a dense vocabulary index, NOT an ordinal of a name and
+        # not a truncation of one. `readMotorDrive` splits its six leg slots by
+        # `Int(type) % 3` and the ingest lands the 15 leg motor types on 15
+        # distinct indices covering all three residues on both sides
+        # (`tools/probe_shipped_asset_channels.py`), so the slots are
+        # addressable.
+        #
+        # `setdefault` rather than the old `type_ids.get(ctype, 0)`: the
+        # vocabulary pass runs first so `get` found every name, but the `.get`
+        # form silently falls back to type 0 ("unclassified") for any name that
+        # pass ever misses. Recording the name instead makes a mismatch
+        # impossible rather than invisible.
+        type_index = type_ids.setdefault(ctype, len(type_ids))
         neurons.append(NeuronRecord(
             canonicalID=len(neurons),
             datasetID=int(DatasetID.BANC),
-            type=type_ids.get(ctype, 0),
+            type=type_index,
             region=region,
             side=side,
             transmitter=transmitter_enum(nt_tag),

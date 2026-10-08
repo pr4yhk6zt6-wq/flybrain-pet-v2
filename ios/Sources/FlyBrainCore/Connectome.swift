@@ -185,12 +185,30 @@ public final class Connectome: @unchecked Sendable {
     /// (three separate scans). On a whole-BANC connectome (153,746 neurons)
     /// each scan is 153,746 reads, so an index turns them into a lookup.
     private var regionIndex: [UInt8: [Int32]]? = nil
+    private var cachedHasCellClasses: Bool? = nil
 
     /// Indices of neurons in `region`, in ascending order. O(1) after the
     /// first call; rebuilt automatically if neurons are appended.
     public func neuronIndices(in region: RegionID) -> [Int32] {
         if regionIndex == nil { buildRegionIndex() }
         return regionIndex?[UInt8(region.rawValue)] ?? []
+    }
+
+    /// Does ANY neuron in this connectome carry a cell-class byte? O(1) after
+    /// the first call, invalidated on append like the region index.
+    ///
+    /// The motor readout needs the ASSET's answer to "does this connectome have
+    /// classes", not "did a classed cell happen to fire". It used to infer the
+    /// latter from `firingActiveNeurons`, so on the real BANC asset a frame
+    /// where only unlabelled cells fired flipped the readout to region-only and
+    /// it summed 4,770 sensory afferents in `legNeuromere` as motor command —
+    /// an intermittent short circuit that appears and disappears with the
+    /// activity, and the more likely the quieter the fly is.
+    public var hasCellClasses: Bool {
+        if cachedHasCellClasses == nil {
+            cachedHasCellClasses = neurons.contains { $0.flags != 0 }
+        }
+        return cachedHasCellClasses ?? false
     }
 
     private func buildRegionIndex() {
@@ -226,6 +244,7 @@ public final class Connectome: @unchecked Sendable {
         indexByCanonicalID[n.canonicalID] = Int32(neurons.count)
         neurons.append(n)
         regionIndex = nil   // the region grouping is now stale
+        cachedHasCellClasses = nil
         return true
     }
 

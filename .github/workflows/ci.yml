@@ -37,8 +37,14 @@ jobs:
         run: python tools/mirror_regional_fixture.py
       - name: Tarsal-contact gate (it must be exercisable, not an untested branch)
         run: python tools/probe_tarsal_contact_gate.py
+      - name: Sensory channel targets (no channel may drive the motor readout)
+        run: python tools/probe_channel_targets.py
       - name: Motor readout composition (what the drive is summed over)
         run: python tools/measure_motor_readout_composition.py
+      - name: Sensory channels on the SHIPPED assets (dead / shorted channel)
+        run: python tools/probe_shipped_asset_channels.py
+      - name: Motor pool coverage (the six leg slots must be addressable)
+        run: python tools/measure_motor_pool_coverage.py
       - name: Time-scale gate (drive signal must be readable per step)
         run: python tools/measure_time_scale.py
       - name: Closed-loop parity (sensory input must actually move the fly)

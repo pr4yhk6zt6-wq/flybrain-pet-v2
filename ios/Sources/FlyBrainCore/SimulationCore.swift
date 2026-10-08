@@ -235,14 +235,14 @@ public final class SimulationCore: @unchecked Sendable {
         // every neuron. Falling back to region-only in that case keeps such an
         // asset running exactly as it did; it does not invent a motor label it
         // does not have.
-        var nMotor = 0
-        var nClassed = 0
-        for idx in engine.firingActiveNeurons {
-            let n = connectome.neurons[Int(idx)]
-            if n.flags != 0 { nClassed += 1 }
-            if n.isMotorNeuron { nMotor += 1 }
-        }
-        let classifyByRegion = (nMotor == 0 && nClassed == 0)
+        //
+        // The mode is decided from the ASSET, not from which cells happen to be
+        // firing this step. Reading it off `firingActiveNeurons` made the
+        // readout flip to region-only on any frame where no labelled cell
+        // fired, and it then summed the 4,770 sensory afferents sitting in
+        // `legNeuromere` — an intermittent short circuit that fires MORE often
+        // the quieter the fly is, which is backwards for a motor command.
+        let classifyByRegion = !connectome.hasCellClasses
         var motorDriveTotal: Float = 0
         var motorDriveFromLabel: Float = 0
         for idx in engine.firingActiveNeurons {
@@ -459,9 +459,37 @@ public final class SimulationCore: @unchecked Sendable {
                                      at: engine.currentTimeMs)
             }
         }
-        // Wing strain (campaniform sensilla) whenever the wings are beating.
-        if motor.output.wingStrokeFreq > 1 {
-            let strain = min(motor.output.wingStrokeFreq / 180, 1) * 0.3
+        // Wing strain (campaniform sensilla at the wing base) whenever the wings
+        // are actually beating. The load these report is set by the wing's
+        // MOTION, so the intensity comes from the measured tip speed — the
+        // command would make this channel a copy of the efference, i.e.
+        // feedforward dressed as sensory feedback, and it would be a constant
+        // for as long as the wings were told to beat.
+        //
+        // The strain the campaniform fields report scales with the square of
+        // the wing velocity, so the normalisation is a reference TIP SPEED, not
+        // a commanded frequency. `strokeResponseRef` is that reference: the RMS
+        // tip speed at the calibrated maximum stroke, which both implementations
+        // compute as 2·π·180 Hz·0.9 rad·2.5 mm/√2 = 1799.4 mm/s
+        // (`tools/verify_body_physics.py` asserts it, and the published range is
+        // ~2.0-2.5 m/s for a 1.4 rad stroke at ~180 Hz — this model's stroke is
+        // a little slower and the gate reports it rather than hiding it).
+        //
+        // What matters for the loop is the CONSEQUENCE of the choice: at the
+        // calibrated stroke the channel carries 1799.4/1799.4 = 1.0 of the
+        // reference, so the sensillum's reading is a graded fraction of the
+        // normal beat and it saturates only if a future stroke exceeds what the
+        // physics was calibrated against. The 0.3 ceiling is INFERRED and
+        // matches the strength the previous version applied at full drive, so
+        // nothing else re-tunes.
+        //
+        // The reference is named rather than inlined because the number IS the
+        // physics: `tools/verify_body_physics.py` asserts the calibrated tip
+        // speed equals it, so the two cannot drift apart silently.
+        let strainRef = max(dynamics.measuredWingTipSpeed, 0)
+        if strainRef > 0 {
+            let strokeResponseRefMmPerSec: Float = 1799.4
+            let strain = min(strainRef / strokeResponseRefMmPerSec, 1) * 0.3
             for m in sensory.wingStrainInput(intensity: strain) {
                 engine.injectCurrent(into: m.neuron, current: m.current,
                                      at: engine.currentTimeMs)
@@ -500,6 +528,10 @@ public final class SimulationCore: @unchecked Sendable {
         // Velocity belonged to the old place; carrying it across a teleport
         // would make the next step meaningless.
         dynamics.setVelocity(SIMD3(0, 0, 0))
+
+        // The wings are not beating where the old pose left them, and the
+        // actuator state is derived from the command anyway.
+        dynamics.resetWingActuatorState()
 
         // The load high-pass holds a baseline measured at the OLD pose, and the
         // afferent was resolved against whatever connectome existed when it was

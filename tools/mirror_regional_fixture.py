@@ -184,6 +184,74 @@ def build_closed(classed: bool):
     return regions, index_of, side_of, flags, [sorted(v) for v in out]
 
 
+def build(topology: str, classed: bool):
+    """Either fixture shape, with or without cell-class labels."""
+    if topology == "regional":
+        return build_regional(classed)
+    if topology == "closed":
+        return build_closed(classed)
+    raise ValueError(f"unknown topology {topology!r}")
+
+
+def input_neuron(index_of, side_of, flags, side, region):
+    """Mirror of `SensoryInterface.selectInputNeuron`, pass for pass — the order
+    of these passes IS the behaviour, so it must match the Swift source:
+
+      1. sensory-labelled cell on the requested side;
+      2. any sensory-labelled cell (rescues a request for a side the region does
+         not have — side 0 on an asset whose cells are all left/right);
+      3. labelled, non-motor cell on the requested side, then on side 0, then any;
+      4/5. positional — wanted side, then side 0, then the region's first cell
+         (where an asset with no class byte lands, unchanged).
+
+    Step 1 existing is what stops `odorInput(side: 1)` and `odorInput(side: 2)`
+    from collapsing onto one neuron; step 2 existing is what stops every channel
+    on the real asset from resolving to NOTHING (no BANC cell carries side 0).
+    """
+    ids = index_of.get(region, [])
+    if not ids:
+        return None
+    by_class = any(flags[i] & FLAG_MOTOR for i in ids)
+
+    def acceptable(i):
+        return not (by_class and (flags[i] & FLAG_MOTOR))
+
+    for i in ids:
+        if (flags[i] & FLAG_SENSORY) and side_of[i] == side:
+            return i
+    for i in ids:
+        if flags[i] & FLAG_SENSORY:
+            return i
+    if any(flags[i] != 0 for i in ids):
+        for wanted in (side, 0):
+            for i in ids:
+                if flags[i] == 0 or (flags[i] & FLAG_MOTOR):
+                    continue
+                if side_of[i] == wanted:
+                    return i
+        for i in ids:
+            if flags[i] != 0 and acceptable(i):
+                return i
+    for wanted in (side, 0):
+        for i in ids:
+            if acceptable(i) and side_of[i] == wanted:
+                return i
+    for i in ids:
+        if acceptable(i):
+            return i
+    return None
+
+
+def input_neuron_pre_fix(index_of, side_of, side, region):
+    """The rule as it stood before: first cell matching the side, else the
+    region's first cell, with no regard for what the readout sums."""
+    ids = index_of.get(region, [])
+    for i in ids:
+        if side_of[i] == side:
+            return i
+    return ids[0] if ids else None
+
+
 def touch_region(index_of):
     """`inputNeuron(region: .legNeuromere, side: 1)` on these fixtures: no leg
     neuron has side 1, so the side-0 fallback returns the region's FIRST cell."""

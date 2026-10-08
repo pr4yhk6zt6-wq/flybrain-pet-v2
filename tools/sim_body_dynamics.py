@@ -17,6 +17,7 @@ GRAVITY = 9806.65        # mm/s2
 STAND_HEIGHT = 0.8       # mm
 LEG_TRACTION_GAIN = 800  # nN per mm/s
 LEG_MAX_FORCE = 2500     # nN per leg
+STROKE_ACTUATOR_TAU_MS = 15   # ms, mirror of BodyDynamics.strokeActuatorTauMs
 GROUND_FRICTION = 0.6
 LINEAR_DRAG = 6          # nN per mm/s
 ANGULAR_DRAG = 60
@@ -72,6 +73,8 @@ class Body:
         self.elapsed_ms = 0.0
         self.wing_tip = 0.0
         self.lift = 0.0
+        self.stroke_amp = 0.0
+        self.stroke_freq = 0.0
 
     def forward(self):
         return [1.0, 0.0, 0.0]
@@ -107,9 +110,18 @@ class Body:
             force[0] += fwd[0] * f_long + lat[0] * f_side
             force[2] += fwd[2] * f_long + lat[2] * f_side
         # 2. wings
-        tip = wing_tip_speed(amp, freq)
+        # The wings lag the command: muscle cannot change stroke instantly, so
+        # the realised stroke is a first-order lag of the commanded one, and it
+        # is the REALISED stroke that makes force and that a strain receptor on
+        # the wing would measure. Mirror of `BodyDynamics.step`.
+        alpha = min(1.0, dt * 1000.0 / max(STROKE_ACTUATOR_TAU_MS, 1e-3))
+        self.stroke_amp += (amp - self.stroke_amp) * alpha
+        self.stroke_freq += (freq - self.stroke_freq) * alpha
+        self.stroke_amp = max(0.0, self.stroke_amp)
+        self.stroke_freq = max(0.0, self.stroke_freq)
+        tip = wing_tip_speed(self.stroke_amp, self.stroke_freq)
         self.wing_tip = tip
-        lift, thrust = aerodynamics(amp, freq, asym, pitch_bias)
+        lift, thrust = aerodynamics(self.stroke_amp, self.stroke_freq, asym, pitch_bias)
         self.lift = lift
         force[1] += dor[1] * lift
         force[0] += fwd[0] * thrust

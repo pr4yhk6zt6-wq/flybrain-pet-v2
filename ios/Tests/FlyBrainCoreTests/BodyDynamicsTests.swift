@@ -27,6 +27,77 @@ final class BodyDynamicsTests: XCTestCase {
         return fly
     }
 
+    // MARK: - Wing actuator: the wing is not the command
+
+    /// The wings lag the motor command, and the force uses the REALISED stroke.
+    ///
+    /// Muscle cannot change stroke amplitude in one step, so the realised
+    /// stroke is a first-order lag of the commanded one (time constant
+    /// `strokeActuatorTauMs`). This is what makes the wing-strain channel a
+    /// sensor: it reads the wing, not the efference copy. If the body applied
+    /// the command instantly and the channel read the command, the two would
+    /// agree perfectly for a reason that has nothing to do with sensing.
+    func testWingStrokeLagsItsCommand() {
+        var fly = airborneBody()
+        var command = BodyMotorCommand()
+        command.wingStrokeAmplitude = 0.9
+        command.wingStrokeFrequency = 180
+
+        fly.step(command: command, dt: 0.1)
+        // After a single 0.1 ms step with a 15 ms time constant only ~0.67% of
+        // the command is realised — measured: 0.0060 rad and 1.2 Hz.
+        XCTAssertGreaterThan(fly.measuredStrokeAmplitude, 0)
+        XCTAssertLessThan(fly.measuredStrokeAmplitude, 0.01,
+                          "the stroke reached \(fly.measuredStrokeAmplitude) rad in one "
+                          + "step, so there is no actuator lag at all")
+        XCTAssertLessThan(fly.measuredStrokeFrequency, 5,
+                          "the frequency reached \(fly.measuredStrokeFrequency) Hz in one step")
+
+        // The measured tip speed must be derived from the MEASURED stroke, not
+        // from the command: recomputing from the command would give the full
+        // 1799 mm/s while the wings have barely moved.
+        let p = PhysicsParameters()
+        let fromMeasured = BodyDynamics.wingTipSpeed(
+            amplitude: fly.measuredStrokeAmplitude,
+            frequencyHz: fly.measuredStrokeFrequency,
+            wingLengthMm: p.wingLengthMm)
+        let fromCommand = BodyDynamics.wingTipSpeed(amplitude: 0.9, frequencyHz: 180,
+                                                    wingLengthMm: p.wingLengthMm)
+        XCTAssertEqual(fly.measuredWingTipSpeed, fromMeasured, accuracy: 1e-3)
+        XCTAssertLessThan(fromMeasured, 0.05 * fromCommand,
+                          "the reported tip speed is essentially the commanded one")
+    }
+
+    /// Driven long enough, the realised stroke converges ON the command rather
+    /// than settling short of it — a lag, not a loss.
+    func testWingStrokeConvergesToItsCommand() {
+        var fly = airborneBody()
+        var command = BodyMotorCommand()
+        command.wingStrokeAmplitude = 0.9
+        command.wingStrokeFrequency = 180
+        for _ in 0..<5000 { fly.step(command: command, dt: 0.1) }
+        XCTAssertEqual(fly.measuredStrokeAmplitude, 0.9, accuracy: 1e-3)
+        XCTAssertEqual(fly.measuredStrokeFrequency, 180, accuracy: 0.01)
+    }
+
+    /// A teleport drops the wings back to rest: derived state belongs to the
+    /// pose it was measured at, and leaving it set would make the first step
+    /// after a spawn report a stroke that never happened.
+    func testTeleportResetsWingActuatorState() {
+        var fly = airborneBody()
+        var command = BodyMotorCommand()
+        command.wingStrokeAmplitude = 0.9
+        command.wingStrokeFrequency = 180
+        for _ in 0..<5000 { fly.step(command: command, dt: 0.1) }
+        XCTAssertGreaterThan(fly.measuredStrokeAmplitude, 0.8)
+
+        fly.teleport(position: SIMD3(0, 200, 0), forward: SIMD3(1, 0, 0),
+                     up: SIMD3(0, 1, 0))
+        XCTAssertEqual(fly.measuredStrokeAmplitude, 0)
+        XCTAssertEqual(fly.measuredStrokeFrequency, 0)
+        XCTAssertEqual(fly.measuredWingTipSpeed, 0)
+    }
+
     // MARK: - Calibration against measured quantities
 
     /// The RMS wing-tip speed at full wing drive must land in the measured

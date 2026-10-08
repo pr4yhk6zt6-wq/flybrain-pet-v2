@@ -291,8 +291,22 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
         RegionID.VENTRAL_NERVE_CORD, RegionID.LEG_NEUROMERE,
         RegionID.WING_NEUROPIL, RegionID.ABDOMINAL_NEUROMERE,
     }
+    # Neuropils that mix motor neurons with the afferents that report into them,
+    # which is what the real release does (measured on banc-888:
+    # legNeuromere = 187 motor + 4,770 sensory of 9,954). The first two indices
+    # of such a region are motor and the next two are sensory, so a channel and
+    # the readout have genuinely different cells to land on — exactly like the
+    # Swift `regionalConnectome(cellClasses: true)` fixture. Giving the whole
+    # region one class instead made `wingNeuropil` MOTOR-ONLY, which left the
+    # wing-strain channel with no afferent on the asset the app actually runs.
+    _MIXED = {
+        RegionID.LEG_NEUROMERE, RegionID.WING_NEUROPIL, RegionID.VENTRAL_NERVE_CORD,
+        RegionID.SUBESOPHAGEAL_ZONE,
+    }
 
-    def _class_flags(region) -> int:
+    def _class_flags(region, i) -> int:
+        if region in _MIXED:
+            return FLAG_MOTOR if i < 2 else FLAG_SENSORY if i < 4 else 0
         if region in _SENSORY:
             return FLAG_SENSORY
         if region in _MOTOR:
@@ -306,17 +320,28 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
     neuron_id = 0
     for region, (label, cx, cy, cz) in centers.items():
         start = neuron_id
-        for _ in range(neurons_per_region):
+        for i in range(neurons_per_region):
             neurons.append(NeuronRecord(
                 canonicalID=neuron_id,
                 datasetID=DatasetID.SYNTHETIC,
                 type=1,  # generic interneuron; motor types refined later
                 region=int(region),
-                side=1 if region in (RegionID.RETINA_LEFT,) else 2 if region in (RegionID.RETINA_RIGHT,) else 0,
+                # Sides: the real release has no centre-line cell at all — it
+                # says left or right for every one of its 153,746 neurons
+                # (measured in `tools/measure_motor_pool_coverage.py`). The demo
+                # used to leave every non-retina cell at side 0, so a channel
+                # that asked for a side silently resolved to the region's first
+                # cell. Alternating the cells left/right makes the demo exercise
+                # the same selection the release does, and puts motor AND
+                # sensory cells on both sides of every mixed neuropil
+                # (legNeuromere, wingNeuropil).
+                side=(1 if region == RegionID.RETINA_LEFT
+                      else 2 if region == RegionID.RETINA_RIGHT
+                      else 1 if i % 2 == 0 else 2),
                 transmitter=int(TransmitterType.CHOLINERGIC) if region not in (
                     RegionID.MUSHROOM_BODY, RegionID.CENTRAL_COMPLEX) else int(TransmitterType.GABAERGIC),
                 provenance=int(Provenance.INFERRED),
-                flags=_class_flags(region),
+                flags=_class_flags(region, i),
                 morphologyIndex=-1,
                 incomingStart=0, incomingCount=0,
                 outgoingStart=0, outgoingCount=0,

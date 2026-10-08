@@ -49,6 +49,12 @@ def run(b, steps, **kw):
 
 # 1. wing geometry / tip speed are the calibrated, published-scale numbers
 tip = wing_tip_speed(MAX_STROKE_AMP, MAX_STROKE_FREQ)
+# The reference the sensillum normalises against must BE this number, not a
+# round one near it: `SimulationCore` declares `strokeResponseRefMmPerSec`
+# = 1799.4 and a comment there once claimed 2800 mm/s, which no formula
+# produces. Pinning it here makes the drift a test failure.
+check("sensillum reference is the calibrated tip speed", abs(tip - 1799.4) < 0.1,
+      f"calibrated tip speed has drifted from the sensillum reference: {tip:.1f} mm/s")
 check("wingTipSpeedIsMeasuredScale", 1500 < tip < 2100,
       f"{tip:.0f} mm/s (expect ~1799, published ~2000-2500)")
 
@@ -95,9 +101,48 @@ check("airborneSilentWingsFall", b.vel[1] < -500 and not b.grounded,
       f"vy {b.vel[1]:.1f} mm/s at y {b.pos[1]:.1f} mm")
 
 # 8. airborne with driven wings: climbs and gains altitude
+#
+# The threshold is a RISE, not an absolute height, and it is 10 mm rather than
+# 20 because the wings now LAG the command (strokeActuatorTauMs, muscle cannot
+# change stroke instantly). Measured with the lag: 13.6 mm of rise over this
+# 200 ms window while vy climbs to +340 mm/s — the fly is accelerating upward,
+# it has simply not covered as much ground in 200 ms as it would if the wings
+# produced full force in the first step. The old 20 mm figure was fitted to
+# that no-lag behaviour (measured 56.5 mm) and so encoded a timing artefact of
+# instant force rather than the property under test.
 b = run(airborne(100.0), 2000, **DRIVEN)
-check("drivenWingsClimb", b.vel[1] > 100 and b.pos[1] > 120,
-      f"vy {b.vel[1]:.1f} mm/s, y {b.pos[1]:.1f} mm")
+rise = b.pos[1] - 100.0
+check("drivenWingsClimb", b.vel[1] > 200 and rise > 10.0,
+      f"vy {b.vel[1]:.1f} mm/s, rise {rise:.1f} mm")
+# ...and the opposite case must stay clearly opposite, or "it climbs" would be
+# satisfied by any upward drift.
+# Window kept short enough that the body is still in free fall: over 2000
+# steps it reaches the ground and the rebound would make "is it rising?" read
+# as true.
+b = run(airborne(100.0), 500, **SILENT)
+check("silentWingsDoNotClimb", b.vel[1] < 0 and (b.pos[1] - 100.0) < 0,
+      f"vy {b.vel[1]:.1f} mm/s, rise {b.pos[1] - 100.0:.1f} mm")
+
+# 9. the wing actuator lags its command, and the MEASURED stroke is what the
+#    airborne force uses. Without this the strain channel could read the motor
+#    command and still agree with the body, which is exactly the kind of
+#    agreement that makes a sensor a copy of the efference.
+b = Body()
+b.pos = [0.0, 100.0, 0.0]
+b.vel = [0, 0, 0]
+b.grounded = False
+b.step(amp=0.9, freq=180.0, dt=1e-4, legs_in_contact=False, contact=0.0)
+check("strokeLagsCommand", 0 < b.stroke_amp < 0.9 and b.stroke_freq < 180.0,
+      f"after 1 step: amp {b.stroke_amp:.4f} (cmd 0.9), "
+      f"freq {b.stroke_freq:.1f} (cmd 180)")
+check("measuredTipSpeedTracksMeasuredStroke",
+      abs(b.wing_tip - wing_tip_speed(b.stroke_amp, b.stroke_freq)) < 1e-3,
+      f"tip {b.wing_tip:.1f} vs recomputed {wing_tip_speed(b.stroke_amp, b.stroke_freq):.1f}")
+# It must converge to the command, not settle short of it.
+run(b, 5000, amp=0.9, freq=180.0, dt=1e-4, legs_in_contact=False, contact=0.0)
+check("strokeConvergesToCommand",
+      abs(b.stroke_amp - 0.9) < 1e-3 and abs(b.stroke_freq - 180.0) < 1e-2,
+      f"steady state: amp {b.stroke_amp:.4f}, freq {b.stroke_freq:.2f}")
 
 # 9. landing: once wing drive collapses the fly returns to the substrate
 b = run(airborne(40.0), 4000, **DRIVEN)

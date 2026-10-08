@@ -103,14 +103,21 @@ struct ConnectomeView: View {
         VStack(spacing: 16) {
             Text("Connectome Mode").font(.title2.bold())
             if let core = app.core {
+                // The real Metal renderer (Phase 9-10). It replaces the
+                // "renderer lands in Phase 9-10" placeholder, and it needs the
+                // live `core` for two things only: the neuron array to upload
+                // once, and the engine's O(active) activity ring per frame.
+                ConnectomeRenderView(core: core)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 320)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 TelemetryStrip(core: core)
-                Text("Full Metal neuron renderer lands in Phase 9-10.")
-                    .font(.caption).foregroundStyle(.secondary)
                 Text("Neurons: \(core.connectome.neuronCount)   Synapses: \(core.connectome.synapseCount)")
                     .font(.callout.monospaced())
-                // live spike-rate summary (real telemetry, spec #38)
                 Text("Spikes: \(core.engine.spikeCount)")
                     .font(.callout.monospaced())
+                Text("Drag to orbit · pinch to zoom")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
         }

@@ -47,6 +47,12 @@ jobs:
         run: python tools/measure_motor_pool_coverage.py
       - name: Time-scale gate (drive signal must be readable per step)
         run: python tools/measure_time_scale.py
+      - name: Render packing gate (packed word widths vs the real enums)
+        run: python tools/probe_render_packing.py
+      - name: Render camera gate (projection conventions + framing)
+        run: python tools/verify_render_camera.py
+      - name: Render palette gate (region table domain + separation)
+        run: python tools/verify_render_palette.py
       - name: Closed-loop parity (sensory input must actually move the fly)
         run: python tools/closed_loop_parity.py
       - name: Body physics offline gates (calibration + regression)

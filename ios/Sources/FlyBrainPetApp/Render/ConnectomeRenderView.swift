@@ -1,0 +1,116 @@
+//
+//  ConnectomeRenderView.swift
+//  FlyBrainPetApp
+//
+//  Hosts the Metal renderer in SwiftUI and owns the orbit gesture. The camera
+//  maths is in FlyBrainCore (`RenderCamera`) so that the conventions it depends
+//  on — column-major matrices, Metal's 0..1 depth, the up axis — are covered by
+//  `swift test` rather than by looking at the screen. This file is the thin part
+//  that cannot be tested, so it is kept as small as it can be.
+//
+
+import SwiftUI
+import MetalKit
+import simd
+import FlyBrainCore
+
+struct ConnectomeRenderView: UIViewRepresentable {
+    let core: SimulationCore
+
+    /// Must inherit from NSObject: the recognisers below are wired with
+    /// `#selector`, which needs an Objective-C-visible target.
+    final class Coordinator: NSObject {
+        var renderer: ConnectomeRenderer?
+        /// How many instances are currently uploaded, so `updateUIView` can tell
+        /// a real reload from an ordinary redraw.
+        var uploadedCount = -1
+
+        @objc func drag(_ g: UIPanGestureRecognizer) {
+            guard let renderer, let view = g.view else { return }
+            let t = g.translation(in: view)
+            g.setTranslation(.zero, in: view)
+            var cam = renderer.camera
+            // ~0.005 rad per point: a full-width drag on a ~390 pt screen sweeps
+            // about a third of a turn — enough to orbit, not enough to lose the
+            // animal.
+            cam.yaw += Float(t.x) * 0.005
+            // Clamp pitch short of the poles. At ±π/2 the view axis becomes
+            // parallel to `up` and the basis stops being determined, so the
+            // frame flips; `RenderCamera.basis(forUp:)` documents the same limit.
+            cam.pitch = max(-1.45, min(1.45, cam.pitch - Float(t.y) * 0.005))
+            renderer.camera = cam
+        }
+
+        @objc func pinch(_ g: UIPinchGestureRecognizer) {
+            guard let renderer, g.scale > 0 else { return }
+            var cam = renderer.camera
+            // Stay inside the frustum's own limits: closer than a few near
+            // planes clips the cloud open, past the far plane it vanishes.
+            cam.distance = max(cam.nearPlane * 4,
+                               min(cam.farPlane * 0.9,
+                                   cam.distance / Float(g.scale)))
+            g.scale = 1
+            renderer.camera = cam
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> MTKView {
+        let view = MTKView()
+        view.device = MTLCreateSystemDefaultDevice()
+        view.colorPixelFormat = .bgra8Unorm
+        // The engine ticks independently of the display, so a dropped frame
+        // shows stale activity rather than stalling the simulation.
+        view.preferredFramesPerSecond = 60
+        view.isPaused = false
+        view.enableSetNeedsDisplay = false
+        view.clearColor = MTLClearColor(red: 0.04, green: 0.05, blue: 0.07,
+                                        alpha: 1)
+
+        guard let device = view.device,
+              let renderer = ConnectomeRenderer(device: device, view: view) else {
+            // No Metal device (or no shader): the host shows its own readout, so
+            // an empty view is a visible failure rather than a silent one.
+            return view
+        }
+
+        renderer.configure(model: ConnectomeRenderModel(connectome: core.connectome))
+        context.coordinator.uploadedCount = renderer.renderedInstanceCount
+
+        // Only the neurons that are actually firing are pushed each frame, and
+        // the renderer clears exactly those on the next frame, so the upload
+        // stays O(active) — the same discipline the engine itself is built on.
+        let engine = core.engine
+        renderer.activityProvider = { [weak engine] in
+            guard let engine else { return [] }
+            return RenderActivity.snapshot(engine: engine)
+        }
+
+        view.delegate = renderer
+        context.coordinator.renderer = renderer
+
+        let pan = UIPanGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.drag(_:)))
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.pinch(_:)))
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(pinch)
+        return view
+    }
+
+    func updateUIView(_ uiView: MTKView, context: Context) {
+        // A finished load swaps the connectome in place. Rebuild only then, and
+        // reframe so a denser cloud is not left off-screen; an ordinary redraw
+        // must not re-upload 153,746 instances.
+        guard let renderer = context.coordinator.renderer else { return }
+        // `neuronCount` on the header is Int32; the coordinator tracks Int.
+        let expected = Int(core.connectome.neuronCount)
+        if context.coordinator.uploadedCount != expected {
+            let model = ConnectomeRenderModel(connectome: core.connectome)
+            renderer.configure(model: model)
+            renderer.reframe(model: model)
+            context.coordinator.uploadedCount = renderer.renderedInstanceCount
+        }
+    }
+}

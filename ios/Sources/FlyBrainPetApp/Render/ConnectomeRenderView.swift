@@ -100,17 +100,23 @@ struct ConnectomeRenderView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        // A finished load swaps the connectome in place. Rebuild only then, and
-        // reframe so a denser cloud is not left off-screen; an ordinary redraw
-        // must not re-upload 153,746 instances.
+        // A finished load swaps the connectome in place. Rebuild only then; an
+        // ordinary redraw must not re-upload 153,746 instances.
         guard let renderer = context.coordinator.renderer else { return }
         // `neuronCount` on the header is Int32; the coordinator tracks Int.
         let expected = Int(core.connectome.neuronCount)
         if context.coordinator.uploadedCount != expected {
-            let model = ConnectomeRenderModel(connectome: core.connectome)
-            renderer.configure(model: model)
-            renderer.reframe(model: model)
+            renderer.configure(model: ConnectomeRenderModel(connectome: core.connectome))
             context.coordinator.uploadedCount = renderer.renderedInstanceCount
         }
+
+        // NOTE: no explicit reframe here, and that is deliberate. `configure`
+        // flags the renderer, and `draw(in:)` reframes on the next frame using
+        // the DRAWABLE's aspect ratio, which is the only place it is known.
+        // Asking for a reframe from `updateUIView` would fit the camera against
+        // whatever aspect happened to be cached — 1.0 before the first frame —
+        // and a non-square view would frame the model slightly wrong. That was
+        // a real bug here once; the fix is to leave the framing to the renderer
+        // rather than to re-add a call from the view.
     }
 }

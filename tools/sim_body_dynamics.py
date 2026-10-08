@@ -88,6 +88,19 @@ class Body:
     def ground_speed(self):
         return math.hypot(self.vel[0], self.vel[2])
 
+    def teleport(self, pos, vel=None):
+        """Mirror of `BodyDynamics.teleport`: a spawn, not a move. Derived
+        actuator state belongs to the pose it was measured at, so it is cleared;
+        carrying the stroke of the previous flight over would make the first
+        frames report a wing beat that never happened."""
+        self.pos = list(pos)
+        self.vel = list(vel) if vel else [0.0, 0.0, 0.0]
+        self.stroke_amp = 0.0
+        self.stroke_freq = 0.0
+        self.wing_tip = 0.0
+        self.lift = 0.0
+        self.grounded = self.pos[1] <= GROUND_Y + STAND_HEIGHT
+
     def step(self, fwd_target=0.0, lat_target=0.0, contact=1.0,
              legs_in_contact=True, amp=0.0, freq=0.0, asym=0.0,
              pitch_bias=0.0, haltere=0.0, dt=0.0001):

@@ -159,6 +159,19 @@ expected = -GRAVITY * 0.001
 check("unitsAreMillimetresPerSecondSquared", 0.95 <= b.vel[1] / expected <= 1.05,
       f"dv {b.vel[1]:.3f} mm/s vs g*1ms {expected:.3f}")
 
+# 12. a teleport is a spawn: derived actuator state must not survive it, or the
+#     first frames of a spawned fly report a stroke from its previous pose — and
+#     that feeds the wing-strain channel straight back into the connectome.
+b = Body()
+b.pos = [0.0, 100.0, 0.0]
+b.grounded = False
+run(b, 5000, amp=0.9, freq=180.0, dt=1e-4, legs_in_contact=False, contact=0.0)
+check("teleportClearsActuatorState", b.stroke_amp > 0.8, f"pre-teleport amp {b.stroke_amp:.3f}")
+b.teleport([0.0, 200.0, 0.0])
+check("teleportClearsActuatorState",
+      b.stroke_amp == 0.0 and b.stroke_freq == 0.0 and b.wing_tip == 0.0,
+      f"after teleport: amp {b.stroke_amp}, freq {b.stroke_freq}, tip {b.wing_tip}")
+
 # 11. determinism: identical inputs give bit-identical state
 a = run(Body(), 4000, fwd_target=12.0, contact=0.5, dt=DT)
 c = run(Body(), 4000, fwd_target=12.0, contact=0.5, dt=DT)

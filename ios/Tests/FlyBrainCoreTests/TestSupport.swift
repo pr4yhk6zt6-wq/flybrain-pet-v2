@@ -167,19 +167,27 @@ extension TestSupport {
             // (the default) reproduces this fixture as it has always been — no
             // labels, so the readout and the sensory interface both fall back to
             // region-only selection.
-            let flags: UInt8
-            if cellClasses && (region == .legNeuromere || region == .wingNeuropil) {
-                switch pid % neuronsPerRegion {
-                case 0: flags = NeuronFlags.motor
-                case 1: flags = NeuronFlags.motor
-                case 2: flags = NeuronFlags.sensory
-                case 3: flags = NeuronFlags.sensory
-                default: flags = 0
+            //
+            // The class is applied to each neuron's index WITHIN its region, not
+            // to the global `pid`. This block used to switch on `pid %,` which is
+            // the global counter, so the pattern never restarted at the region
+            // that is supposed to carry it: CI caught it as
+            // testTarsalAfferentIsPickedByClassWhenLabelsExist failing, because
+            // legNeuromere and the afferent both resolved to neuron 150, i.e. the
+            // fixture had no sensory cell in the motor region at all.
+            for i in 0..<neuronsPerRegion {
+                let flags: UInt8
+                if cellClasses && (region == .legNeuromere || region == .wingNeuropil) {
+                    switch i {
+                    case 0: flags = NeuronFlags.motor
+                    case 1: flags = NeuronFlags.motor
+                    case 2: flags = NeuronFlags.sensory
+                    case 3: flags = NeuronFlags.sensory
+                    default: flags = 0
+                    }
+                } else {
+                    flags = 0
                 }
-            } else {
-                flags = 0
-            }
-            for _ in 0..<neuronsPerRegion {
                 neurons.append(NeuronRecord(
                     canonicalID: Int32(pid),
                     datasetID: 0,

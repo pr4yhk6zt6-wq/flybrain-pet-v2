@@ -11,6 +11,16 @@ WORLD → sensors → sensory neurons → CONNECTOME → motor neurons → BODY 
 There is no behavior tree, no scripted personality, no LLM controlling the fly.
 Behavior is **emergent action selection** from real spiking neural dynamics over connectome-derived network topology.
 
+## Branding
+App icon and in-app logo live in `assets/brand/` as SVG (the source of truth).
+`tools/make_app_icons.py` rasterises the icon into
+`ios/Sources/FlyBrainPetApp/Assets.xcassets/AppIcon.appiconset/` (the 12 sizes
+Xcode needs) plus the in-app logo at 800x300, and **fails** if the icon it
+wrote is not opaque RGB — iOS shows a white box behind any alpha, so the
+transparent-cornered source SVG must be flattened onto its own background.
+Requires `rsvg-convert` and Pillow; it is not part of CI because the generated
+PNGs are committed and CI has no rasteriser.
+
 ## Status
 - [x] Phase 1: repo scaffold, architecture, data model, provenance system
 - [x] Phase 2 (core): event-driven spiking neural engine (LIF/AdEx), sparse spike propagation, deterministic, unit-tested

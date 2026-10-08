@@ -53,7 +53,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flybrain.pet
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # Was "" (asset-catalogue icon suppressed) while there was no artwork.
+        # tools/make_app_icons.py builds Assets.xcassets/AppIcon.appiconset from
+        # assets/brand/flybrain-app-icon.svg, so the name it writes is the one
+        # used here.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   FlyBrainCoreTests:
     type: bundle.unit-test
     platform: iOS

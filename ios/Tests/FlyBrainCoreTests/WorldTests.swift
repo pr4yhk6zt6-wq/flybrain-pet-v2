@@ -101,10 +101,17 @@ final class WorldTests: XCTestCase {
             // Settle first: the body is spawned at its stand height and settles
             // under gravity, which moves it by ~1.8 mm on its own. Measuring
             // from the spawn pose would credit that transient to the loop.
-            // Measured after settling, the controls above still show motion
-            // (0.5286 mm) and the driven runs show the SAME 0.5286 mm, which is
-            // how the missing drive was caught.
-            core.run(steps: 500)
+            //
+            // 2500 steps, not 500: the fixtures drive the motor pools to zero,
+            // so a single spike during settling leaves a velocity that decays
+            // for another ~0.9 s (900 steps) and moves the animal a further
+            // ~0.009 mm. At 500 the no-odour control therefore measured
+            // 0.008919 mm of pure free decay — below the 0.01 threshold but
+            // only by 11 %, i.e. the assertion's margin was being set by the
+            // body's own coasting rather than by anything the loop did.
+            // `tools/mirror_regional_fixture.py` reports both figures (its
+            // `rest` parameter), so the number is measured, not guessed.
+            core.run(steps: 2500)
             let start = core.position
             core.run(steps: steps)
             let d = core.position - start
@@ -135,6 +142,16 @@ final class WorldTests: XCTestCase {
         // Control 1 — same connectome, odour removed. The ONLY difference is the
         // sensory input, so any motion here would come from something other than
         // the loop.
+        //
+        // This is the control that FAILED on commit fe65764 (3.265094 mm in CI),
+        // because the reafference arm carried a DC term: a standing fly holds
+        // its tarsal load at ~1.0 body-weight, and with the absolute load
+        // injected as current that constant became a permanent input, so the
+        // animal walked in a dark, odourless world. Offline the same arm also
+        // pins the readout's leg drive at saturation, so adding odour barely
+        // changes the motion — the stimulus stops being what sets the
+        // behaviour. `tools/mirror_regional_fixture.py` reproduces both branch
+        // values and gates the fix.
         let noOdor = run(connectome: closed, odorEmission: 0, steps: 4000)
         XCTAssertLessThan(noOdor.moved, 0.01,
                           "the fly moved \(noOdor.moved) mm with no odour in the scene")
@@ -148,6 +165,35 @@ final class WorldTests: XCTestCase {
         XCTAssertLessThan(cutPath.moved, 0.01,
                           "the fly moved \(cutPath.moved) mm even though its connectome "
                           + "has no path from the sensory region to the motor pools")
+
+        // Control 3 — the cut-path fixture WITH cell-class labels. Control 2
+        // alone could not separate two different things, and that ambiguity was
+        // hidden by the DC bug: on the unlabelled fixture the readout falls back
+        // to summing every leg-neuromere neuron, so the afferent the reafference
+        // arm injects into was itself summed as "motor output". The current then
+        // entered the readout directly and the resulting displacement depended
+        // only on whether the arm was injecting (4000 of 4000 steps), not on
+        // whether the connectome carried a path. Measured offline, that fallback
+        // alone accounts for 0.986033 mm against Swift's 0.9931856 mm, i.e. the
+        // whole of Control 2's failure. With the labels present the readout must
+        // select the motor cells and the arm must land on a sensory cell, so the
+        // two are no longer the same population.
+        let labelled = TestSupport.regionalConnectome(neuronsPerRegion: 10,
+                                                      cellClasses: true)
+        XCTAssertEqual(labelled.validate(), [],
+                       "the labelled fixture is not a valid connectome")
+        let cutPathLabelled = run(connectome: labelled, odorEmission: 4, steps: 4000)
+        XCTAssertLessThan(cutPathLabelled.moved, 0.01,
+                          "the fly moved \(cutPathLabelled.moved) mm on a labelled asset "
+                          + "with no sensory->motor path; a sensory current landing on a "
+                          + "cell the readout also sums would short the loop")
+        // The positive control has to stay loud, or "it stopped moving" would be
+        // satisfied by muting the sensory system altogether.
+        XCTAssertGreaterThan(long.moved, 0.05,
+                             "the loop must still move the fly when it is stimulated")
+        XCTAssertGreaterThan(long.moved, 10 * max(noOdor.moved, 1e-6),
+                             "the response to odour must be distinguishable from the "
+                             + "unstimulated control, not merely non-zero")
     }
 
     func testWorldRemovesOdorSources() {

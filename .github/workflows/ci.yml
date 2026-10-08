@@ -33,6 +33,10 @@ jobs:
         run: python tools/check_tests.py
       - name: Closed-loop fixture gate (the fixture itself must be valid)
         run: python tools/verify_closed_loop_fixture.py
+      - name: Tarsal-load reafference gate (no DC term, no shorted loop)
+        run: python tools/mirror_regional_fixture.py
+      - name: Tarsal-contact gate (it must be exercisable, not an untested branch)
+        run: python tools/probe_tarsal_contact_gate.py
       - name: Motor readout composition (what the drive is summed over)
         run: python tools/measure_motor_readout_composition.py
       - name: Time-scale gate (drive signal must be readable per step)

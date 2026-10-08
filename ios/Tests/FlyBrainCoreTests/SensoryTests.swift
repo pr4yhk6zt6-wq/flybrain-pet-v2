@@ -173,4 +173,41 @@ final class SensoryTests: XCTestCase {
         // classifier remains a pure observer: no backdoor into the sim
         XCTAssertNotNil(core.behavior.current)
     }
+
+    /// The tarsal-load afferent must be chosen by CELL CLASS when the asset
+    /// carries labels, and must fall back to position only when it does not.
+    ///
+    /// This is the difference between a closed loop and a short circuit. In
+    /// `legNeuromere` the motor neurons and the sensory afferents that report to
+    /// them are the same neuropil; picking the region's first cell picked a
+    /// MOTOR neuron, so the reafference current entered the motor readout
+    /// directly and no connectome was involved. Offline
+    /// (`tools/mirror_regional_fixture.py`) that fallback accounted for the
+    /// entire displacement of the cut-path control: 0.986 mm against Swift's
+    /// 0.993 mm.
+    func testTarsalAfferentIsPickedByClassWhenLabelsExist() {
+        let unlabelled = TestSupport.regionalConnectome(neuronsPerRegion: 10)
+        let labelled = TestSupport.regionalConnectome(neuronsPerRegion: 10,
+                                                     cellClasses: true)
+
+        let byPosition = SensoryInterface(connectome: unlabelled).touchAfferent(side: 1)
+        XCTAssertNotNil(byPosition, "the fallback must still find a cell")
+        // No labels anywhere: the fallback may land on a motor neuron, and that
+        // is the best the asset permits. Assert the fallback is what runs, not
+        // that it is right.
+        XCTAssertEqual(unlabelled.neurons[Int(byPosition!)].flags, 0)
+
+        let byClass = SensoryInterface(connectome: labelled).touchAfferent(side: 1)
+        XCTAssertNotNil(byClass, "a labelled asset must still resolve an afferent")
+        XCTAssertTrue(labelled.neurons[Int(byClass!)].isSensoryNeuron,
+                      "the load afferent must carry the sensory label")
+        XCTAssertFalse(labelled.neurons[Int(byClass!)].isMotorNeuron,
+                       "the load afferent must NOT be a cell the motor readout sums")
+
+        // The two selections must be genuinely different neurons — otherwise the
+        // label would be decorative and the assertion above vacuous.
+        XCTAssertNotEqual(byPosition, byClass,
+                          "the class filter did not change the selection, so this "
+                          + "fixture cannot distinguish the two paths")
+    }
 }

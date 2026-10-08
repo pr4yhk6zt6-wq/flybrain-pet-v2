@@ -100,13 +100,53 @@ public struct SensoryInterface {
     /// Mechanosensory touch input (e.g. leg contact). Targets VNC sensory
     /// interneurons on the given side (spec #15).
     public func touchInput(side: UInt8, intensity: Float) -> [SensoryInput] {
-        var out: [SensoryInput] = []
+        guard let n = touchAfferent(side: side) else { return [] }
+        return touchInput(neuron: n, intensity: intensity)
+    }
+
+    /// Touch input on a specific afferent. The caller that knows WHICH cell the
+    /// afferent is (the reafference arm selects by cell class) uses this so the
+    /// choice is not re-derived per step.
+    public func touchInput(neuron: Int32, intensity: Float) -> [SensoryInput] {
         let inten = min(max(intensity, 0), 1)
-        if let n = inputNeuron(region: .legNeuromere, side: side) {
-            out.append(SensoryInput(neuron: n, current: inten * 50,
-                                    modality: .mechanosensation, strength: inten))
+        return [SensoryInput(neuron: neuron, current: inten * 50,
+                             modality: .mechanosensation, strength: inten)]
+    }
+
+    /// The leg afferent a tarsal-load input should land on for `side`.
+    ///
+    /// MEASURED cell-class labels beat position. `legNeuromere` mixes the
+    /// sensory afferents with the motor neurons they report to (on the real
+    /// BANC release only 1.9% of its 9,954 neurons are motor; 47.9% are
+    /// sensory afferents). Picking the region's first cell therefore picked a
+    /// MOTOR neuron in the fixtures, so the "sensory" current entered the
+    /// motor readout directly and bypassed the connectome entirely — measured
+    /// on `TestSupport.regionalConnectome`, the cut-path control moved its
+    /// displacement from 0.986 mm (region fallback) to 0.002 mm (by class).
+    ///
+    /// Precedence: classed side match, classed side 0, any side match, any
+    /// side-0 cell. Assets written before the class byte existed carry no
+    /// labels, so this degrades to the old positional result rather than
+    /// inventing a label it does not have.
+    public func touchAfferent(side: UInt8) -> Int32? {
+        var classedSide: Int32? = nil
+        var classedCentre: Int32? = nil
+        var sideOnly: Int32? = nil
+        var anyCentre: Int32? = nil
+        for idx in connectome.neuronIndices(in: .legNeuromere) {
+            let n = connectome.neurons[Int(idx)]
+            if n.isSensoryNeuron {
+                if n.side == side, classedSide == nil { classedSide = idx }
+                if n.side == 0, classedCentre == nil { classedCentre = idx }
+            }
+            if n.side == side, sideOnly == nil { sideOnly = idx }
+            if n.side == 0, anyCentre == nil { anyCentre = idx }
         }
-        return out
+        if let c = classedSide { return c }
+        if let c = classedCentre { return c }
+        if let c = sideOnly { return c }
+        if let c = anyCentre { return c }
+        return inputNeuron(region: .legNeuromere, side: side)
     }
 
     /// Looming (threat) input → lobula plate / giant-fiber-compatible drive

@@ -145,7 +145,8 @@ extension TestSupport {
     /// regions (spec #10), so sensory mapping and behavior classification
     /// tests hit real region targeting.
     static func regionalConnectome(neuronsPerRegion: Int = 10,
-                                   efficacy: Float = 0.5) -> Connectome {
+                                   efficacy: Float = 0.5,
+                                   cellClasses: Bool = false) -> Connectome {
         let regions: [RegionID] = [
             .retinaLeft, .retinaRight, .lamina, .medulla, .lobula, .lobulaPlate,
             .opticLobe, .antennalLobe, .mushroomBody, .lateralHorn,
@@ -160,6 +161,24 @@ extension TestSupport {
 
         var pid = 0
         for region in regions {
+            // The real release labels cell class on every neuron, and the tarsal
+            // afferent the reafference arm must land on lives in the SAME
+            // neuropil as the motor neurons it reports to. `cellClasses: false`
+            // (the default) reproduces this fixture as it has always been — no
+            // labels, so the readout and the sensory interface both fall back to
+            // region-only selection.
+            let flags: UInt8
+            if cellClasses && (region == .legNeuromere || region == .wingNeuropil) {
+                switch pid % neuronsPerRegion {
+                case 0: flags = NeuronFlags.motor
+                case 1: flags = NeuronFlags.motor
+                case 2: flags = NeuronFlags.sensory
+                case 3: flags = NeuronFlags.sensory
+                default: flags = 0
+                }
+            } else {
+                flags = 0
+            }
             for _ in 0..<neuronsPerRegion {
                 neurons.append(NeuronRecord(
                     canonicalID: Int32(pid),
@@ -171,6 +190,7 @@ extension TestSupport {
                     side: (region == .retinaLeft || region == .retinaRight) ? UInt8(region == .retinaLeft ? 1 : 2) : 0,
                     transmitter: UInt8(TransmitterType.cholinergic.rawValue),
                     provenance: provIndex(.inferred),
+                    flags: flags,
                     morphologyIndex: -1,
                     incomingStart: 0, incomingCount: 0,
                     outgoingStart: 0, outgoingCount: 0,

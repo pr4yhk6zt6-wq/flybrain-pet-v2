@@ -76,6 +76,31 @@ public final class SimulationCore: @unchecked Sendable {
     /// mean different things for legs, wings and proboscis.
     public var motorDriveReferenceHz: Float = 100
 
+    // MARK: - Tarsal-load reafference (spec #15)
+
+    /// How long the load sensilla take to adapt to a steady support force, in
+    /// ms of neural time. INFERRED: campaniform/trichoid afferents are phasic
+    /// and adapt quickly, and a value that is short relative to the time it
+    /// takes the body to change load keeps the loop free of a self-sustaining
+    /// tonic drive. `tools/mirror_regional_fixture.py` is the gate for that
+    /// property, not for the exact number.
+    public var reafferenceAdaptationTauMs: Double = 1.0
+    /// Receptor gain: intensity per unit load deviation (load is expressed as a
+    /// fraction of body weight). INFERRED. Published so the offline gate reads
+    /// the SAME value the sim uses instead of keeping a copy that can drift.
+    public var reafferenceGain: Float = 0.6
+    /// Dead band below which a deviation is not signalled at all. Without it
+    /// the contact solver's sub-microNewton resting ripple would be transduced
+    /// into a permanent current. INFERRED.
+    public var reafferenceDeadband: Float = 0.01
+    /// Adaptive baseline of the load high-pass. Derived state, not an input:
+    /// it is re-initialised from the first sample after a reset.
+    private var loadBaseline: Float = 0
+    private var loadBaselineInitialised = false
+    /// The leg afferent the reafference arm injects into, resolved once from
+    /// the cell-class labels (nil until the first step).
+    private var touchAfferentNeuron: Int32?
+
     /// Whether the loaded connectome carries a motor-cell label, so the drive
     /// readout could select motor neurons instead of summing every neuron in
     /// the neuropil. False for assets written before the class byte existed
@@ -360,11 +385,62 @@ public final class SimulationCore: @unchecked Sendable {
     /// tarsal load, haltere-derived body rotation, and wing strain feed
     /// ascending pathways. These are measurements of the body, not commands.
     private func emitMechanosensoryReafference(dt: Double) {
+        // Load sensilla (campaniform/trichoid) signal CHANGES in leg load, not
+        // the static load: a standing fly's sensors adapt to the constant
+        // support force and stop firing. Injecting the ABSOLUTE load instead
+        // made standing a permanent tonic drive, so the fly walked in a dark,
+        // odourless world. CI's log for commit fe65764 shows the symptom: the
+        // no-odour control moved 3.265094 mm on its own, and with odour the
+        // same fixture moved only a little further (3.92 mm offline) because
+        // the readout's leg drive was already pinned at saturation — the
+        // stimulus was no longer the thing setting the behaviour.
+        //
+        // The fix is a rectifying high-pass with ZERO DC gain: only POSITIVE
+        // deviation above the adapting baseline is signalled, so a steady load
+        // yields no sustained drive. `tools/mirror_regional_fixture.py` gates
+        // this: it reproduces the pre-fix cut-path number against Swift's CI
+        // log, then asserts that a load held constant produces no signal, that
+        // a load STEP still does, and that the no-odour/cut-path controls go
+        // quiet while the odour run stays loud.
+        //
+        // NOTE this is a MODEL choice, not a measured receptor transfer
+        // function: the adaptation time constant and gain below are INFERRED.
         let load = dynamics.groundLoadFraction        // 0..1 from contact solver
-        if load > 0.01 {
-            for t in sensory.touchInput(side: 1, intensity: Float(load) * 0.6) {
-                engine.injectCurrent(into: t.neuron, current: t.current,
-                                     at: engine.currentTimeMs)
+        if !loadBaselineInitialised {
+            loadBaseline = load
+            loadBaselineInitialised = true
+        }
+        // The baseline adapts to the RAW load even while airborne, so that the
+        // moment the tarsi touch down is reported as a positive step rather than
+        // being absorbed by a baseline that had frozen at zero.
+        loadBaseline += (load - loadBaseline)
+            * Float(min(1, dt / reafferenceAdaptationTauMs))
+        // A tarsal sensillum can only report load while the tarsus is on the
+        // substrate. Gating on the real contact flag keeps the channel from
+        // signalling during flight, where there is no load to report — and it
+        // matters offline too: it is what stops the channel from becoming a
+        // second drive path when a synthetic fixture fires its motor pool
+        // without the body ever taking a step.
+        let deviation = Float(load) - loadBaseline
+        let intensity = deviation * reafferenceGain
+        if dynamics.isGrounded, intensity > reafferenceDeadband {
+            // Resolve the afferent ONCE (it walks the region index) and pick a
+            // cell that is actually labelled sensory. `touchInput(side:)` would
+            // otherwise take the region's first neuron, and in the fixtures that
+            // neuron is simultaneously the target of this current AND a cell the
+            // motor readout sums — the "sensory" arm then enters the readout
+            // directly and bypasses the connectome. Measured offline
+            // (`tools/mirror_regional_fixture.py`): with the region fallback the
+            // current lands on a neuron the readout sums, and switching to the
+            // class-resolved afferent removes that overlap entirely.
+            if touchAfferentNeuron == nil {
+                touchAfferentNeuron = sensory.touchAfferent(side: 1)
+            }
+            if let n = touchAfferentNeuron {
+                for t in sensory.touchInput(neuron: n, intensity: intensity) {
+                    engine.injectCurrent(into: t.neuron, current: t.current,
+                                         at: engine.currentTimeMs)
+                }
             }
         }
         // Haltere input is proportional to actual angular velocity and to the
@@ -424,6 +500,14 @@ public final class SimulationCore: @unchecked Sendable {
         // Velocity belonged to the old place; carrying it across a teleport
         // would make the next step meaningless.
         dynamics.setVelocity(SIMD3(0, 0, 0))
+
+        // The load high-pass holds a baseline measured at the OLD pose, and the
+        // afferent was resolved against whatever connectome existed when it was
+        // first needed. Both are derived state tied to where the fly is, so a
+        // teleport re-derives them; otherwise the first steps after a spawn
+        // would signal the load step of the teleport itself as tactile input.
+        loadBaselineInitialised = false
+        touchAfferentNeuron = nil
     }
 }
 

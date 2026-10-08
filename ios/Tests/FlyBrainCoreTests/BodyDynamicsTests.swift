@@ -43,9 +43,11 @@ final class BodyDynamicsTests: XCTestCase {
         command.wingStrokeAmplitude = 0.9
         command.wingStrokeFrequency = 180
 
-        fly.step(command: command, dt: 0.1)
-        // After a single 0.1 ms step with a 15 ms time constant only ~0.67% of
-        // the command is realised — measured: 0.0060 rad and 1.2 Hz.
+        fly.step(command: command, dt: 0.0001)
+        // One 0.1 ms step with a 15 ms time constant realises ~0.67% of the
+        // command — measured: 0.0060 rad and 1.2 Hz. (`dt` is SECONDS here; the
+        // neural core's 0.1 ms step is what the caller converts to before
+        // reaching the physics.)
         XCTAssertGreaterThan(fly.measuredStrokeAmplitude, 0)
         XCTAssertLessThan(fly.measuredStrokeAmplitude, 0.01,
                           "the stroke reached \(fly.measuredStrokeAmplitude) rad in one "
@@ -75,7 +77,7 @@ final class BodyDynamicsTests: XCTestCase {
         var command = BodyMotorCommand()
         command.wingStrokeAmplitude = 0.9
         command.wingStrokeFrequency = 180
-        for _ in 0..<5000 { fly.step(command: command, dt: 0.1) }
+        for _ in 0..<5000 { fly.step(command: command, dt: 0.0001) }
         XCTAssertEqual(fly.measuredStrokeAmplitude, 0.9, accuracy: 1e-3)
         XCTAssertEqual(fly.measuredStrokeFrequency, 180, accuracy: 0.01)
     }
@@ -88,7 +90,7 @@ final class BodyDynamicsTests: XCTestCase {
         var command = BodyMotorCommand()
         command.wingStrokeAmplitude = 0.9
         command.wingStrokeFrequency = 180
-        for _ in 0..<5000 { fly.step(command: command, dt: 0.1) }
+        for _ in 0..<5000 { fly.step(command: command, dt: 0.0001) }
         XCTAssertGreaterThan(fly.measuredStrokeAmplitude, 0.8)
 
         fly.teleport(position: SIMD3(0, 200, 0), forward: SIMD3(1, 0, 0),

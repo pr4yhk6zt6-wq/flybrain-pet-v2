@@ -334,6 +334,17 @@ public struct BodyDynamics: Sendable {
         body.velocity = SIMD3(0, 0, 0)
         body.angularVelocity = SIMD3(0, 0, 0)
         body.grounded = position.y <= parameters.groundY + parameters.standHeightMm
+        // Derived actuator state belongs to the pose it was measured at. A
+        // teleport is a spawn, and carrying the stroke of the OLD flight over
+        // would make the first frames of a spawned fly report a wing beat that
+        // never happened — and the wing-strain channel feeds that back into the
+        // connectome, so the fly would sense its own previous life. `setPose`
+        // in `SimulationCore` reaches the physics through here, so this is also
+        // what makes a spawned pose take effect instead of being overwritten by
+        // the next integration step.
+        measuredStrokeAmplitude = 0
+        measuredStrokeFrequency = 0
+        measuredWingTipSpeed = 0
     }
 
     /// Quaternion of the rotation whose body axes map onto the given world

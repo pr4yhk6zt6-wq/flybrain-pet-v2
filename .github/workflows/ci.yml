@@ -53,6 +53,8 @@ jobs:
         run: python tools/probe_render_packing.py
       - name: Render camera gate (projection conventions + framing)
         run: python tools/verify_render_camera.py
+      - name: Tap-pick fixture geometry (the fixture must separate its neurons)
+        run: python tools/probe_neuron_pick_geometry.py
       - name: Render palette gate (region table domain + separation)
         run: python tools/verify_render_palette.py
       - name: Snapshot completeness gate (restore must reproduce the run)

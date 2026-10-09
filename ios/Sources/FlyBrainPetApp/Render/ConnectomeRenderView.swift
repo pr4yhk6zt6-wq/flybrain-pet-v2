@@ -16,6 +16,10 @@ import FlyBrainCore
 
 struct ConnectomeRenderView: UIViewRepresentable {
     let core: SimulationCore
+    /// Called on a tap with the neuron under the finger, or nil for empty
+    /// space. The view owns the gesture because only it knows the camera and
+    /// the drawable aspect the frame was rendered with.
+    var onPick: ((NeuronInspection?) -> Void)? = nil
 
     /// Must inherit from NSObject: the recognisers below are wired with
     /// `#selector`, which needs an Objective-C-visible target.
@@ -24,6 +28,37 @@ struct ConnectomeRenderView: UIViewRepresentable {
         /// How many instances are currently uploaded, so `updateUIView` can tell
         /// a real reload from an ordinary redraw.
         var uploadedCount = -1
+        /// Reports a picked neuron (or nil for a tap on empty space). Set by the
+        /// SwiftUI layer; the tap itself is handled here because the camera and
+        /// the aspect ratio that produced the frame live in the renderer.
+        var onPick: ((NeuronInspection?) -> Void)?
+        /// The connectome picks are resolved against. The coordinator cannot
+        /// reach the view's `core`, and `Connectome` is a reference type, so
+        /// this holds the one live instance rather than a copy.
+        var connectome: Connectome?
+
+        @objc func tap(_ g: UITapGestureRecognizer) {
+            guard let renderer, let view = g.view,
+                  let connectome, let model = renderer.currentModel else { return }
+
+            let size = view.bounds.size
+            guard size.width > 0, size.height > 0 else { return }
+            let p = g.location(in: view)
+            // UIKit's origin is top-left with y down; NDC is origin-centred with
+            // y up, so y is flipped here and only here.
+            let ndc = SIMD2<Float>(Float(p.x / size.width) * 2 - 1,
+                                   1 - Float(p.y / size.height) * 2)
+            // The aspect the LAST FRAME was drawn with, not the view's current
+            // bounds: if the device rotated since, the frame on screen belongs
+            // to the old aspect and picking against the new one would name a
+            // neuron that is not under the finger. `draw(in:)` reframes on
+            // rotation, so this is correct within one frame.
+            let found = connectome.neuron(nearestNDC: ndc,
+                                          camera: renderer.camera,
+                                          model: model,
+                                          aspect: renderer.drawnAspect)
+            onPick?(found)
+        }
 
         @objc func drag(_ g: UIPanGestureRecognizer) {
             guard let renderer, let view = g.view else { return }
@@ -89,6 +124,15 @@ struct ConnectomeRenderView: UIViewRepresentable {
 
         view.delegate = renderer
         context.coordinator.renderer = renderer
+        context.coordinator.connectome = core.connectome
+        context.coordinator.onPick = onPick
+
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.tap(_:)))
+        // One tap, not a double: a double-tap gesture would delay every pick by
+        // the double-click interval for no benefit here.
+        tap.numberOfTapsRequired = 1
+        view.addGestureRecognizer(tap)
 
         let pan = UIPanGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.drag(_:)))
@@ -103,6 +147,10 @@ struct ConnectomeRenderView: UIViewRepresentable {
         // A finished load swaps the connectome in place. Rebuild only then; an
         // ordinary redraw must not re-upload 153,746 instances.
         guard let renderer = context.coordinator.renderer else { return }
+        // A finished load swaps the connectome IN PLACE, so the tap handler must
+        // follow the new instance or it would pick against the previous asset.
+        context.coordinator.connectome = core.connectome
+        context.coordinator.onPick = onPick
         // `neuronCount` on the header is Int32; the coordinator tracks Int.
         let expected = Int(core.connectome.neuronCount)
         if context.coordinator.uploadedCount != expected {

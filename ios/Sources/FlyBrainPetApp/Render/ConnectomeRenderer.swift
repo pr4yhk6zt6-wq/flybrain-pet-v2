@@ -130,6 +130,10 @@ final class ConnectomeRenderer: NSObject, MTKViewDelegate {
         let insts = model.instances
         neuronCount = insts.count
         renderedInstanceCount = neuronCount
+        // Keep the layout for hit-testing, BEFORE the early return below: a
+        // connectome that is being reloaded must not leave the tap handler
+        // pointing at the previous asset's dots.
+        currentModel = model
         // A fresh buffer starts silent, so nothing from the previous asset can
         // survive a reload.
         previousActive.removeAll(keepingCapacity: true)
@@ -211,6 +215,16 @@ final class ConnectomeRenderer: NSObject, MTKViewDelegate {
     /// Aspect of the last frame drawn. Kept so a "reset view" control can
     /// reframe immediately instead of waiting for the next frame.
     private var lastAspect: Float = 1
+
+    /// The layout that is currently uploaded, for hit-testing. This is the same
+    /// array the GPU is drawing, which is the point: picking against a
+    /// separately built model would name dots that are not on screen.
+    private(set) var currentModel: ConnectomeRenderModel?
+
+    /// The aspect ratio the most recent frame was drawn with. Exposed because a
+    /// pick must project through the SAME matrix as the frame the user is
+    /// looking at; `view.bounds` can already have changed after a rotation.
+    var drawnAspect: Float { lastAspect }
 
     /// Returns the camera to the fitted view for the loaded model, keeping the
     /// user's orbit angles. Used by a reset control.

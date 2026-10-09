@@ -98,6 +98,10 @@ struct LifeView: View {
 
 struct ConnectomeView: View {
     @EnvironmentObject private var app: AppModel
+    /// The neuron the last tap landed on, or nil for empty space. Held here
+    /// rather than in the renderer so the SwiftUI readout and the gesture share
+    /// one source of truth.
+    @State private var picked: NeuronInspection?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -107,21 +111,71 @@ struct ConnectomeView: View {
                 // "renderer lands in Phase 9-10" placeholder, and it needs the
                 // live `core` for two things only: the neuron array to upload
                 // once, and the engine's O(active) activity ring per frame.
-                ConnectomeRenderView(core: core)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                ConnectomeRenderView(core: core) { hit in
+                    picked = hit
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                NeuronReadoutPanel(picked: picked,
+                                   neuronCount: core.connectome.neuronCount,
+                                   hasCellClasses: core.connectome.hasCellClasses)
                 TelemetryStrip(core: core)
                 Text("Neurons: \(core.connectome.neuronCount)   Synapses: \(core.connectome.synapseCount)")
                     .font(.callout.monospaced())
                 Text("Spikes: \(core.engine.spikeCount)")
                     .font(.callout.monospaced())
-                Text("Drag to orbit · pinch to zoom")
+                Text("Tap a neuron to identify it · drag to orbit · pinch to zoom")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
         }
         .padding()
+    }
+}
+
+// MARK: - Tap readout (spec: traceability, #118)
+
+/// Shows what the asset records about the tapped cell.
+///
+/// Every line is read off the asset (`NeuronInspection`); nothing here is
+/// recomputed, so a value that is missing says so instead of being replaced by
+/// a plausible one. The two lines that carry provenance — the class byte and
+/// the original ID — each state their own absence, because on this project the
+/// asset is sometimes built without them and "unknown" and "zero" are very
+/// different claims about a real fly.
+struct NeuronReadoutPanel: View {
+    let picked: NeuronInspection?
+    let neuronCount: Int
+    let hasCellClasses: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let n = picked {
+                Text("neuron \(n.index) of \(neuronCount)")
+                    .font(.caption.monospaced().bold())
+                Text(n.traceabilityText)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(n.isTraceable ? Color.secondary : Color.orange)
+                Text("\(n.regionName) · \(n.sideName) · \(n.transmitterName)")
+                    .font(.caption2.monospaced())
+                Text("cell class: \(n.classText)   type \(n.cellType)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(hasCellClasses ? Color.secondary : Color.orange)
+                Text(String(format: "xyz %.1f %.1f %.1f   %.0f outgoing cells",
+                            n.position.x, n.position.y, n.position.z,
+                            Double(n.outgoingEdgeCount)))
+                    .font(.caption2.monospaced())
+            } else {
+                Text("tap a neuron to identify it")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 

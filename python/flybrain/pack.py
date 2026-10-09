@@ -32,9 +32,15 @@ sitting in the same neuromere.
 The cell-type field is u16, not u8: the real BANC release carries 11,566
 distinct cell types, which a u8 vocabulary would silently alias into 256
 buckets. The two pad bytes that used to follow provenance now hold the high
-half of the wider field plus a reserved flags byte, so the stride and every
-later offset are unchanged. Header version is 2; a version-1 asset is rejected
-rather than misread.
+half of the wider field plus a flags byte, so the stride and every later offset
+are unchanged. Header version is 2; a version-1 asset is rejected rather than
+misread. (The v2 change made byte 9 a *reserved* flags byte; the class bits
+were written into it later, without a version bump, because the field already
+existed and a version-2 reader dropped it on read rather than misreading it. A
+version-2 asset therefore has `flags == 0` on every neuron, which is why the
+out-of-range branch in the Swift accessor says "unknown class bits" instead of
+"unlabelled". `CURRENT_VERSION` is 3 — it moved for the sourceID block, not
+for this byte.)
 SynapseRecord (20): i32 pre, post; u16 synapseCount; u8 transmitter; i8 sign;
     u8 confidence, delaySteps; pad2; f32 estimatedEfficacy
 OutEdgeRange (8): i32 start, count

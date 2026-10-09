@@ -26,6 +26,10 @@ final class SensoryTests: XCTestCase {
             _ = (atX, y, z)
             return 25
         }
+        func tasteAcceptance(atX: Float, y: Float, z: Float) -> Float {
+            _ = (atX, y, z)
+            return 0   // this fixture tests vision; it carries no taste
+        }
     }
 
     func testCompoundEyeBuildsOmmatidia() {

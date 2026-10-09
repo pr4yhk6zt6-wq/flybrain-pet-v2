@@ -72,6 +72,34 @@ public struct OdorSource: Sendable {
         let d = FlyMath.length(p - position)
         return emissionRate * exp(-d * d / (2 * diffusionConstant))
     }
+
+    /// Taste acceptance when the proboscis tip touches `at`.
+    ///
+    /// This is a CONTACT sense and is modelled as one: the falloff length is a
+    /// fixed ~0.25 mm — the scale of a labellum sensillum's reach — not the
+    /// authored `diffusionConstant`, which describes how far the volatile
+    /// plume carries. Using the odor radius here would let the fly taste food
+    /// it is nowhere near, which is the reduction that makes "taste" a second
+    /// odor channel.
+    ///
+    /// Sign comes from the substance, not from a behavior:
+    ///   food / fermentation → + (phagostimulant; both are sugar/yeast substrates)
+    ///   aversive            → − (bitter / deterrent)
+    ///   water / pheromone   → 0 (drives drinking / courtship, not feeding)
+    /// `pheromone` is deliberately excluded: it is a courtship signal, and a
+    /// fly that "tastes" a mate is a category error.
+    public func tasteAcceptance(at p: SIMD3<Float>) -> Float {
+        let valence: Float
+        switch kind {
+        case .food, .fermentation: valence = 1
+        case .aversive: valence = -1
+        case .water, .pheromone: return 0
+        }
+        let d = FlyMath.length(p - position)
+        let reach: Float = 0.25
+        let falloff = max(1 - d / reach, 0)
+        return valence * emissionRate * falloff * falloff
+    }
 }
 
 /// A physical object the fly can touch / bump into (vision + tactile).
@@ -309,6 +337,26 @@ public final class World: WorldProvider, @unchecked Sendable {
         // simple: ground temp + tiny height gradient
         _ = (atX, z)
         return groundTemperatureC - max(0, y) * 0.2
+    }
+
+    // MARK: - Taste (contact chemoreception, spec #14)
+
+    /// Taste acceptance at a point: **positive** when the point is on a
+    /// phagostimulant source (food), **negative** on an aversive one, and 0
+    /// where there is nothing the labellum could touch. Water is neither — it
+    /// drives drinking through the hydration term, not through acceptance, so
+    /// it must not read as a food taste: an animal that cannot tell sugar from
+    /// water is not tasting.
+    ///
+    /// The field is SHORTER-RANGE than odor by construction (contact sense),
+    /// and it does not propagate as a cloud — see `OdorSource.tasteAcceptance`.
+    public func tasteAcceptance(atX: Float, y: Float, z: Float) -> Float {
+        let p = SIMD3(atX, y, z)
+        var total: Float = 0
+        for o in odorSources {
+            total += o.tasteAcceptance(at: p)
+        }
+        return min(max(total, -1), 1)
     }
 
     // MARK: - Collision / physics helpers (spec #30)

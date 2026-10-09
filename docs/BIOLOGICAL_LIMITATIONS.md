@@ -51,9 +51,19 @@ biology.
 |---|---|---|
 | Vision (compound-eye approximation) | MEDIUM | APPROXIMATED (feature channels, no real ommatidia) |
 | Olfaction (odor fields, antennal lobe, MB) | MEDIUM | APPROXIMATED |
-| Gustation (labellum/legs/proboscis) | PLANNED | n/a yet |
+| Gustation (labellum/legs/proboscis) | LOW | APPROXIMATED — two contact sites (tarsal, labellar) with a physical reach gate; no receptor-level transduction, taste is a scalar acceptance, not a receptor array |
 | Mechanosensation / proprioception | PLANNED | n/a yet |
-| Haltere inertial feedback | PLANNED | n/a yet |
+| Haltere inertial feedback | LOW | APPROXIMATED — inertial input from integrated body state |
+
+**Reachability note (2026-10-09).** "Wired in the core" and "reachable by the
+animal" are different claims, and this project has been wrong about the second
+while being right about the first. Two channels — gustation and looming — were
+implemented, unit-tested and gated in the core, yet had **zero** producers in
+the app: the looming detector ran every frame against a world that contained no
+moving object, and `gustatoryInput` had no call site at all. Both are fixed, and
+`tools/probe_app_stimulus_reachability.py` now asserts that the shipped app can
+produce the stimulus each channel consumes. `Loom` in the app is the control
+that makes the escape channel reachable.
 
 ## Motor / body
 

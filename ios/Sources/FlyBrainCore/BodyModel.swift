@@ -44,6 +44,25 @@ public struct Haltere: Sendable {
 }
 
 public struct FlyBody {
+    /// Length of the fully extended proboscis (mm). The labellum of
+    /// *Drosophila* reaches roughly a head-length forward when fully
+    /// extended; this is a skeleton approximation (spec #18), stated as such.
+    public static let proboscisLengthMm: Float = 0.9
+    /// Joint angle (rad) at which the proboscis is open far enough that the
+    /// labellum could be touching a substrate. Below this the mouth is still
+    /// folded and contact chemoreception is not possible, however close the
+    /// fly is standing.
+    public static let proboscisReachAngle: Float = 0.35
+
+    /// Whether a proboscis at `angle` is open far enough for the labellum to
+    /// touch a substrate. A pure predicate on the joint state, so the contact
+    /// rule can be tested without a step of the simulation — the loop writes
+    /// this joint every step, and a test that sets it by hand is testing a
+    /// value the next step overwrites.
+    public static func proboscisReaches(_ angle: Float) -> Bool {
+        angle >= proboscisReachAngle
+    }
+
     // Segments
     public var head: BodySegment
     public var thorax: BodySegment

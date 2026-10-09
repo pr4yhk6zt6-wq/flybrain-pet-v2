@@ -85,6 +85,12 @@ struct LifeView: View {
             Button { app.toggleLights() } label: {
                 Label("Lights", systemImage: "lightbulb.fill")
             }
+            // The loom button is not decoration: it is the only way to reach
+            // the looming (escape) channel in the app. Without it the channel
+            // runs on every frame and can never fire.
+            Button { app.loomAt(SIMD3(app.core?.position.x ?? 0, app.eyeHeight + 0.3, -3)) } label: {
+                Label("Loom", systemImage: "arrow.down.forward.circle.fill")
+            }
         }
         .buttonStyle(.bordered)
     }

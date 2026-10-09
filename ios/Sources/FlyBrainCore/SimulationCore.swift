@@ -21,6 +21,12 @@ public protocol WorldProvider: AnyObject {
     func odorConcentration(atX: Float, y: Float, z: Float) -> (left: Float, right: Float)
     /// Temperature at a position.
     func temperature(atX: Float, y: Float, z: Float) -> Float
+    /// Taste acceptance at a point (+ = phagostimulant, − = aversive, 0 =
+    /// nothing contactable there). Separate from `odorConcentration` because
+    /// contact chemoreception is a CONTACT sense: it requires the proboscis to
+    /// reach the substrate, so it falls off far more sharply than the volatile
+    /// odor field the antennae sample from a distance.
+    func tasteAcceptance(atX: Float, y: Float, z: Float) -> Float
 }
 
 /// Center of the simulation. Owns the fly's brain + body + the loop drivers.
@@ -117,6 +123,16 @@ public final class SimulationCore: @unchecked Sendable {
     var motorDriveTotalForTesting: Float = 0
     var motorDriveFromLabelledOnlyForTesting: Float = 0
 
+    // Gustatory channel observation (see GustatoryPathwayTests). These report
+    // what the sampling rule actually did this step — a test that cannot see
+    // whether the channel fired cannot tell a working sense from a silent one.
+    /// True when a taste sample was taken from either chemoreceptive site.
+    public private(set) var tasteSampledForTesting = false
+    /// The signed acceptance of the most recent sample (0 = none).
+    public private(set) var lastTasteAcceptanceForTesting: Float = 0
+    /// True when the proboscis was open far enough for the labellar route.
+    public private(set) var proboscisReachedForTesting = false
+
     public init(connectome: Connectome,
                 parameters: SimulationParameters = SimulationParameters()) {
         self.connectome = connectome
@@ -191,6 +207,40 @@ public final class SimulationCore: @unchecked Sendable {
         if let w = world {
             let (oL, oR) = w.odorConcentration(atX: position.x, y: position.y, z: position.z)
             sensoryInputs += sensory.odorInput(concentrationL: oL, concentrationR: oR)
+
+            // Taste is a CONTACT sense, so it is sampled at the proboscis TIP
+            // and only when the proboscis is actually extended to the point of
+            // contact. Sampling it at the body centre — or sampling it at all
+            // while the proboscis is retracted — would let the fly "taste"
+            // food it is standing a body-length away from, which is just a
+            // second odor channel wearing a contact sensor's name.
+            //
+            // The reach gate reads the PROBOSCIS JOINT ANGLE that the motor
+            // drive produced earlier in this same step, so the sense is
+            // downstream of the nervous system, not a scripted proximity test.
+            //
+            // Tarsal taste is sampled FIRST and separately, because the two are
+            // not the same sensor and only one of them can bootstrap the other.
+            // The proboscis is driven by SEZ activity, and SEZ had no input
+            // except labellar taste — so gating labellar taste on the proboscis
+            // being open made the channel unable to ever open it. Drosophila
+            // breaks exactly this circle with tarsal sensilla: the fly tastes
+            // the substrate through its FEET, which is what extends the
+            // proboscis, and the labellum then confirms. Sampling tarsal taste
+            // at the ground contact point (gated on real stance, not on the
+            // mouth) is what makes the first taste possible.
+            let tarsalTaste = tasteAtTarsus(w)
+            if tarsalTaste != 0 {
+                sensoryInputs += sensory.gustatoryInput(acceptance: tarsalTaste)
+                tasteSampledForTesting = true
+                lastTasteAcceptanceForTesting = tarsalTaste
+            }
+            let labellarTaste = tasteAtProboscisTip(w)
+            if labellarTaste != 0 {
+                sensoryInputs += sensory.gustatoryInput(acceptance: labellarTaste)
+                tasteSampledForTesting = true
+                lastTasteAcceptanceForTesting = labellarTaste
+            }
         }
         // internal-state modulation → sensory gain (spec #24)
         let gain = internalState.sensoryGain
@@ -219,6 +269,56 @@ public final class SimulationCore: @unchecked Sendable {
 
         // 7) Passive behavior classification (observation, spec #44)
         behavior.observe(core: self)
+    }
+
+    /// Where the proboscis tip is in the world right now (mm).
+    ///
+    /// Built from the articulated body: the segment origin is fixed in
+    /// body-frame, and the labellum extends along the local proboscis axis as
+    /// the joint opens. The distance is a stated approximation of the extended
+    /// proboscis (spec #18 allows a skeleton approximation here), but the
+    /// DIRECTION and the dependence on the joint angle are real, which is what
+    /// the reach gate needs.
+    public var proboscisTipPosition: SIMD3<Float> {
+        let headPos = body.head.position
+        let angle = body.proboscis.angle
+        // +x body axis is forward, so the proboscis points forward and down as
+        // the joint opens; at full extension it reaches `proboscisLengthMm`.
+        let out = SIMD3<Float>(cos(angle), -sin(angle), 0)
+        let tip = headPos + out * (FlyBody.proboscisLengthMm * min(max(angle / 1.4, 0), 1))
+        return dynamics.position + dynamics.rotate(tip)
+    }
+
+    /// Taste acceptance at the tarsus (feet on substrate).
+    ///
+    /// Flies carry gustatory sensilla on the tarsi and taste what they stand
+    /// on; in *Drosophila* a tarsal sugar taste is itself enough to elicit
+    /// proboscis extension. This is the input that lets the feeding loop start
+    /// from nothing — it depends on stance, not on the proboscis the loop is
+    /// trying to open.
+    ///
+    /// Sampled at the ground contact point, gated on `isGrounded`. The contact
+    /// point is the body position projected down to the substrate; the leg
+    /// tarsi are what carry the load the physics solver already integrates.
+    private func tasteAtTarsus(_ w: WorldProvider) -> Float {
+        guard dynamics.isGrounded else { return 0 }
+        return w.tasteAcceptance(atX: position.x,
+                                 y: dynamics.parameters.groundY,
+                                 z: position.z)
+    }
+
+    /// Taste acceptance at the proboscis tip, gated by real contact.
+    ///
+    /// Both conditions are physical, neither is a decision: the tip must be
+    /// within the substrate's reach (checked by the world, at the tip), and
+    /// the proboscis must be open far enough to touch (`proboscisReachAngle`).
+    /// A retracted proboscis cannot taste even if the tip position would
+    /// overlap the source — the animal's mouth is not out.
+    private func tasteAtProboscisTip(_ w: WorldProvider) -> Float {
+        guard FlyBody.proboscisReaches(body.proboscis.angle) else { return 0 }
+        proboscisReachedForTesting = true
+        let tip = proboscisTipPosition
+        return w.tasteAcceptance(atX: tip.x, y: tip.y, z: tip.z)
     }
 
     /// Read per-group motor drive from current VNC/SEZ activity (real spikes).

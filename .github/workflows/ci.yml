@@ -67,6 +67,10 @@ jobs:
         run: python tools/probe_loom_fixture_geometry.py
       - name: Looming target region reaches motor cells on every asset
         run: python tools/probe_looming_pathway.py
+      - name: Gustatory pathway (the channel must be driven, reachable and gated)
+        run: python tools/probe_gustatory_pathway.py
+      - name: App stimulus reachability (the shipped app must be able to fire each channel)
+        run: python tools/probe_app_stimulus_reachability.py
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py

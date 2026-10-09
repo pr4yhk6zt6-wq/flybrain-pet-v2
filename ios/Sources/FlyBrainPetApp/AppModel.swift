@@ -106,4 +106,29 @@ final class AppModel: ObservableObject {
             world.removeAllLights()
         }
     }
+
+    /// Send an object at the fly from `spot`, on a collision course with the
+    /// eye. This is the only thing in the app that can drive the looming
+    /// (escape) channel: a looming detector responds to radial expansion of the
+    /// retinal image, which requires something to actually approach. Without a
+    /// moving object the channel is wired, tested, and unreachable — the aerial
+    /// equivalent of a doorbell nobody can press.
+    ///
+    /// The velocity points at the fly's current position, so the object closes
+    /// on the eye rather than passing beside it.
+    func loomAt(_ spot: SIMD3<Float>) {
+        guard let core else { return }
+        let toEye = core.position - spot
+        let dir = FlyMath.normalize(toEye)
+        world.addMovingObject(MovingObject(position: spot, velocity: dir * 6,
+                                           radius: 1.4))
+    }
+
+    func clearLoom() {
+        world.removeAllMovingObjects()
+    }
+
+    /// The fly's current height, for placing a stimulus at eye level rather
+    /// than at the spawn point.
+    var eyeHeight: Float { core?.position.y ?? 0.8 }
 }

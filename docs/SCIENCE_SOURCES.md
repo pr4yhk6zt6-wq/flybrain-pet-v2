@@ -52,6 +52,18 @@ biology in the app.
 - Borst, Haag & Reiff. "Fly motion vision." *Annu. Rev. Neurosci.* (2010) — motion
   detection, T4/T5, lobula plate tangential cells.
 - Mauss, Borst et al. — wide-field motion, optomotor responses.
+- **Klapoetke et al. "Ultra-selective looming detection from radial motion
+  opponency." *Nature* 542, 469–473 (2017) (PMID 29120418)** — identifies
+  **LPLC2** (lobula plate/lobula columnar, type II) as the Drosophila
+  looming detector; selectivity comes from radial motion opponency. This is the
+  cell class the app's loom channel drives, and the reason looming is modelled
+  as the EXPANSION of retinal coverage: a loom is the growth of the retinal
+  image, and a static object — however large — produces none.
+- **Peek & Card. "Comparative approaches to escape." *Curr. Opin. Neurobiol.*
+  (2016) / Gabbiani et al.** — escape is released at a fixed angular size when
+  the object reaches a threshold time-to-contact; the peak response of
+  loom-selective cells tracks the R/v ratio. Thresholding an expansion RATE is
+  the same rule (rate ≈ 1/τ), which is how `loomExpansionReference` is defined.
 - Bahl et al. — looming/escape circuits (giant fiber system, DLM).
 - Card & Dickinson — escape takeoff biomechanics.
 - Strauss — leg coordination & walking mutants.

@@ -132,6 +132,12 @@ public final class SimulationCore: @unchecked Sendable {
         self.vision.luminanceProvider = { [weak self] x, y, z in
             self?.world?.luminance(atX: x, y: y, z: z) ?? 0.5
         }
+        // ...and the ray caster, so the eye can see a body that is nearer than
+        // the luminance sample range. Without it the eye reads the background
+        // through the approaching body and no loom is ever produced.
+        self.vision.rayProvider = { [weak self] origin, dir in
+            self?.scene?.raycast(origin: origin, direction: dir)
+        }
     }
 
     // MARK: - Closed loop
@@ -151,6 +157,12 @@ public final class SimulationCore: @unchecked Sendable {
     public func step() {
         let dt = parameters.dt
 
+        // 0) Advance world time and integrate moving bodies BEFORE the eye
+        //    samples. Sampling first would compare two samples of the same
+        //    instant, so the covered area would never change and no loom could
+        //    ever be measured — the detector would be looking at a still frame.
+        scene?.step(dtSeconds: dt / 1000)
+
         // 1) Sensory sampling (biological transduction, spec #9)
         let pose = FlyPose(forwardX: forward.x, forwardY: forward.y, forwardZ: forward.z,
                            upX: up.x, upY: up.y, upZ: up.z)
@@ -160,6 +172,16 @@ public final class SimulationCore: @unchecked Sendable {
         // 2) Inject sensory inputs into connectome neurons
         var sensoryInputs: [SensoryInput] = []
         for ev in visualEvents {
+            // A loom is not one more edge like any other: it is the escape
+            // drive (spec #23), so it goes through the dedicated looming
+            // channel to the lobula plate. Folding it into the generic
+            // mapToInput path would scale it to 1/8 strength (strength×10 via
+            // a strength/80 readout) and it would no longer be the threat
+            // signal the giant-fibre route is wired for.
+            if ev.pathway == .looming {
+                sensoryInputs += sensory.loomingInput(intensity: ev.strength)
+                continue
+            }
             if let (target, current) = vision.mapToInput(event: ev, connectome: connectome) {
                 sensoryInputs.append(SensoryInput(neuron: target, current: current,
                                                   modality: .vision, strength: abs(current) / 80))

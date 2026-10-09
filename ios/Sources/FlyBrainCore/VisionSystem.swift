@@ -11,9 +11,15 @@
 //  matching biological channels:
 //    - per-ommatidium brightness/contrast sampling
 //    - ON / OFF pathways (separate dark/light edges)
-//    - motion & optic flow (translational/rotational)
-//    - looming (expansion → threat drive)
-//    - small-object motion
+//    - wide-field flicker (the temporal derivative feeding the medulla)
+//    - looming (expansion → threat drive), the escape channel
+//
+//  NOT yet emitted here, though the `VisualPathway` enum and `mapToInput`
+//  already reserve targets for them (do not claim otherwise until they are
+//  implemented — that gap is exactly how this file's looming claim went
+//  unfulfilled while looking complete):
+//    - motionDirectional (T4/T5 direction-selective optic flow)
+//    - smallObject (lobula small-target motion, Lévy-flight-like search)
 //
 //  Every signal emitted here is converted into synaptic current injected into
 //  connectome neurons — never an "if X then Y" behavior command.
@@ -84,6 +90,29 @@ public struct EyeConfig: Sendable {
     public init() {}
 }
 
+/// The first opaque surface a ray meets, as the world reports it.
+///
+/// The eye cannot detect an approach from a single luminance sample at a fixed
+/// distance: the ray passes straight through a body that is nearer than the
+/// sample range and lands on the background behind it, so a body filling the
+/// whole visual field reports exactly the same value as empty sky. Answering
+/// "what did this ray hit, and was it a moving body" is what makes expansion
+/// measurable at all.
+public struct RayHit: Sendable {
+    /// Distance from the ray origin to the surface.
+    public let distance: Float
+    /// The surface belongs to a moving body — the only thing that can loom.
+    public let isMovingBody: Bool
+    /// Luminance of the surface itself (0 = black silhouette).
+    public let luminance: Float
+
+    public init(distance: Float, isMovingBody: Bool, luminance: Float) {
+        self.distance = distance
+        self.isMovingBody = isMovingBody
+        self.luminance = luminance
+    }
+}
+
 /// Right-handed fly-centric coordinate convention:
 /// +X forward, +Y left, +Z up (consistent with BodyModel).
 public struct FlyPose: Sendable {
@@ -106,6 +135,55 @@ public final class VisionSystem: @unchecked Sendable {
 
     /// Luminance field provider — the world implements this (spec #13/#29).
     public var luminanceProvider: ((Float, Float, Float) -> Float)?
+
+    /// Where a ray from the eye first meets an opaque surface. Optional; when
+    /// absent the eye sees only the luminance field at a fixed range, which is
+    /// a static scene by construction and cannot produce looming.
+    ///
+    /// This exists because sampling a single point at a FIXED distance cannot
+    /// see an approaching body: the ray passes through it and lands on the
+    /// background, so a body that fills the whole visual field reports exactly
+    /// the same luminance as an empty sky. The eye has to ask what the ray hit,
+    /// not what the world looks like at one arbitrary depth.
+    public var rayProvider: ((SIMD3<Float>, SIMD3<Float>) -> RayHit?)?
+
+    /// Fraction of the eye covered by a moving body, one sample ago. Looming
+    /// is the GROWTH of this number, so it must survive between samples.
+    private var previousCoverage: Float = 0
+    private(set) var coverage: Float = 0
+    /// Slow estimate of the scene's baseline occlusion (a static wall in the
+    /// way, say). Subtracting it keeps a constant occluder from reading as a
+    /// loom, the same way the visual system adapts to background luminance.
+    private var baselineCoverage: Float = 0
+    /// False until the first loom sample, so the first sample cannot look like
+    /// an expansion from zero.
+    private var loomInitialised = false
+
+    // MARK: - Loom model
+
+    /// Expansion rate (fraction of the eye covered per second) at which the
+    /// loom drive saturates.
+    ///
+    /// Thresholding the EXPANSION RATE is equivalent to thresholding TIME TO
+    /// CONTACT: a body closing at constant speed covers a fraction that grows
+    /// roughly as `1/tau`, so `rate > r` is `tau < 1/r`. That fixed
+    /// angular-size / fixed-time-to-contact trigger is what loom-selective
+    /// neurons report — Klapoetke et al. 2017, *Nature* 542:469
+    /// ("Ultra-selective looming detection from radial motion opponency",
+    /// PMID 29120418) identifies LPLC2 in the lobula plate as the Drosophila
+    /// detector, and the peak response of such cells tracks a fixed time
+    /// before collision against the R/v ratio.
+    ///
+    /// INFERRED constant: the literature fixes the FUNCTION (a threshold on
+    /// expansion, i.e. on time to contact), not this particular number.
+    public var loomExpansionReference: Float = 0.7      // per second
+    /// Smallest covered fraction that can count as a loom. A speck expanding
+    /// fast is still a speck, so the expansion has to be carried on a real
+    /// area of retina before it reads as a threat.
+    public var loomMinCoverage: Float = 0.03
+    /// Time constant of the slow estimate of static occlusion (ms). A wall
+    /// that is simply *there* must not read as an approach.
+    public var loomBaselineTauMs: Float = 3000
 
     public init(config: EyeConfig = EyeConfig()) {
         self.config = config
@@ -149,15 +227,7 @@ public final class VisionSystem: @unchecked Sendable {
     /// position (px,py,pz) and orientation (FlyPose), at distance `range`.
     public func worldTarget(ommatidium i: Int, position: (Float, Float, Float),
                             pose: FlyPose, range: Float = 10) -> (Float, Float, Float) {
-        let om = ommatidia[i]
-        // rotate optical axis by pose basis: dir = axisX·f + axisY·r + axisZ·u
-        let f = SIMD3(pose.forwardX, pose.forwardY, pose.forwardZ)
-        let u = SIMD3(pose.upX, pose.upY, pose.upZ)
-        let r = FlyMath.cross(u, f)               // right = up × forward
-        let axis = SIMD3(om.axisX, om.axisY, om.axisZ)
-        let dir = FlyMath.normalize(
-            axis.x * f + axis.y * r + axis.z * u
-        )
+        let dir = rayDirection(i, pose: pose)
         return (position.0 + dir.x * range,
                 position.1 + dir.y * range,
                 position.2 + dir.z * range)
@@ -174,10 +244,27 @@ public final class VisionSystem: @unchecked Sendable {
 
         let alpha = Float(dt) / (Float(dt) + config.adaptationTau)
         let range: Float = 10
+        let eye = SIMD3<Float>(position.0, position.1, position.2)
+
+        // A moving body is only visible if the eye asks what the ray HIT. The
+        // luminance field alone cannot show it: sampling at a fixed range steps
+        // over a nearer body and reads the background behind it.
+        var covered = 0
 
         for (i, om) in ommatidia.enumerated() {
             let t = worldTarget(ommatidium: i, position: position, pose: pose, range: range)
-            let lum = max(0, min(1, provider(t.0, t.1, t.2)))
+            var lum = max(0, min(1, provider(t.0, t.1, t.2)))
+
+            // Ray cast from the eye along the ommatidial axis. If it hits a
+            // body that is closer than the fixed sample range, that body IS
+            // what this ommatidium sees, so it both sets the luminance and
+            // counts toward how much of the eye the body covers.
+            if let hit = rayProvider?(eye, rayDirection(i, pose: pose)) {
+                if hit.distance < range {
+                    lum = max(0, min(1, hit.luminance))
+                    if hit.isMovingBody { covered += 1 }
+                }
+            }
 
             // adaptation (background-relative contrast)
             let adapted = adaptedLuminance[i] + (lum - adaptedLuminance[i]) * alpha
@@ -209,27 +296,65 @@ public final class VisionSystem: @unchecked Sendable {
             }
         }
 
-        // looming detection: expansion of high-contrast region over time.
-        if let looming = computeLooming() {
+        // looming detection: expansion of the covered retinal area over time.
+        if let looming = computeLooming(coveredFraction: Float(covered) / Float(max(ommatidia.count, 1)),
+                                        dtMs: Float(dt)) {
             events.append(looming)
         }
         return events
     }
 
-    /// Expansion-based looming signal: monitors growth rate of bright blobs.
-    private func computeLooming() -> VisualEvent? {
-        // Simplified looming metric: fraction of ommatidia with contrast > 0.3
-        // growing between samples. The world updates prevLuminance naturally;
-        // here we compute a global expansion proxy.
-        var bright = 0
-        for (i, om) in ommatidia.enumerated() {
-            if prevLuminance[i] > 0.4 && abs(om.axisX) < 0.9 {
-                bright += 1
-            }
+    /// Unit direction of an ommatidium's optical axis in world space under `pose`.
+    private func rayDirection(_ i: Int, pose: FlyPose) -> SIMD3<Float> {
+        let om = ommatidia[i]
+        let f = SIMD3(pose.forwardX, pose.forwardY, pose.forwardZ)
+        let u = SIMD3(pose.upX, pose.upY, pose.upZ)
+        let r = FlyMath.cross(u, f)               // right = up × forward
+        let axis = SIMD3(om.axisX, om.axisY, om.axisZ)
+        return FlyMath.normalize(axis.x * f + axis.y * r + axis.z * u)
+    }
+
+    /// Expansion-based looming signal (spec #11, #23).
+    ///
+    /// Looming is the GROWTH of the retinal area covered by a moving body, not
+    /// a contrast threshold: a body on a collision course spreads radially
+    /// over the eye, and the rate of that spread is what the lobula plate
+    /// reports. A body that is merely present — or a static wall — covers a
+    /// constant fraction and must produce nothing, so a slow baseline estimate
+    /// of static occlusion is subtracted before the rate is taken.
+    ///
+    /// Returns nil unless the covered area is real (`loomMinCoverage`) and
+    /// actually growing. This is the difference between seeing a threat and
+    /// seeing an insect sitting still: only expansion is a loom.
+    private func computeLooming(coveredFraction: Float, dtMs: Float) -> VisualEvent? {
+        // One sample of history is needed before a rate exists.
+        guard loomInitialised else {
+            loomInitialised = true
+            baselineCoverage = coveredFraction
+            previousCoverage = coveredFraction
+            coverage = coveredFraction
+            return nil
         }
-        let fraction = Float(bright) / Float(max(ommatidia.count, 1))
-        _ = fraction
-        return nil   // populated by dedicated looming module (Phase 3b)
+        coverage = coveredFraction
+
+        // Slow baseline of static occlusion (a wall in the way): adapts at the
+        // loom time constant so a constant occluder settles out and does not
+        // read as an approach.
+        let beta = Float(min(1, Double(dtMs) / Double(max(loomBaselineTauMs, 1))))
+        baselineCoverage += (coveredFraction - baselineCoverage) * beta
+
+        let dtSec = max(dtMs / 1000, 0.0001)
+        let expansion = (coveredFraction - previousCoverage) / dtSec
+        previousCoverage = coveredFraction
+
+        // Only expansion above the static baseline counts. A body that stops
+        // growing (or recedes) yields no drive.
+        let signal = max(coveredFraction - baselineCoverage, 0)
+        guard signal >= loomMinCoverage, expansion > 0 else { return nil }
+        let drive = min(expansion / max(loomExpansionReference, 0.0001), 1)
+        guard drive > 0 else { return nil }
+        return VisualEvent(sourceOmmatidium: 0, pathway: .looming,
+                           strength: drive, side: 0, time: 0)
     }
 
     /// Map a visual event to a connectome input neuron (retinotopic).

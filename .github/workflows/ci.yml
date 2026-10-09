@@ -61,6 +61,12 @@ jobs:
         run: python tools/probe_snapshot_completeness.py
       - name: Closed-loop parity (sensory input must actually move the fly)
         run: python tools/closed_loop_parity.py
+      - name: Looming producer signatures (static ≠ loom, approach = loom)
+        run: python tools/probe_looming_producer.py
+      - name: Loom fixture geometry (the fixture must cross the coverage floor)
+        run: python tools/probe_loom_fixture_geometry.py
+      - name: Looming target region reaches motor cells on every asset
+        run: python tools/probe_looming_pathway.py
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py

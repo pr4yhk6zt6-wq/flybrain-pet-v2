@@ -286,7 +286,7 @@ public final class SimulationCore: @unchecked Sendable {
         // the joint opens; at full extension it reaches `proboscisLengthMm`.
         let out = SIMD3<Float>(cos(angle), -sin(angle), 0)
         let tip = headPos + out * (FlyBody.proboscisLengthMm * min(max(angle / 1.4, 0), 1))
-        return dynamics.position + dynamics.rotate(tip)
+        return dynamics.position + dynamics.body.rotate(tip)
     }
 
     /// Taste acceptance at the tarsus (feet on substrate).

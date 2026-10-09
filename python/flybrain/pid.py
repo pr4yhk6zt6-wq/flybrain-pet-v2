@@ -252,6 +252,47 @@ class ConnectomeHeader:
 # plausible-looking one.
 SYNTHETIC_SOURCE_BASE = 0x5300000000000000
 
+# --- Synaptic weight calibration (MEASURED, not chosen) -------------------
+# The demo used `synapseCount = randint(1, 3)` and `efficacy = uniform(0.1, 0.6)`
+# from the first scaffold commit, with no pin and no doc. Measured against the
+# engine it makes the asset INERT.
+#
+# The Swift engine delivers a synaptic event as a ONE-STEP current impulse
+# (`emitSpike` pushes a `SynapticEvent(current:)`; `step` sums everything due
+# this step, integrates once, clears). So one presynaptic spike moves the
+# membrane by
+#       dv = I * 10 / tauM * dt  =  I * 0.1 mV      (tauM=10, dt=0.1)
+# and the rest->threshold gap is 10 mV (rest -60, threshold -50). A synapse
+# therefore needs to carry ~100 nA for a single spike to fire its target --
+# exactly what `TestSupport.swift` documents for its chain fixture
+# (synapseCount 100, efficacy 0.5 => 50 nA, "reliably fire the next neuron").
+#
+# The old values gave 0.1-1.8 nA. MEASURED on the shipped asset: max in-degree
+# 10, largest possible summed excitatory current 8.664 nA => 0.866 mV of
+# excursion, which is below the 10 mV gap. NO neuron could be driven to
+# threshold by synapses at all: injecting a cell made that cell fire and
+# nothing else, ever. The connectome was decorative.
+#
+# These numbers follow BANC's own convention (`python/flybrain/banc.py`):
+# `eff = min(1.0, 0.25 + 0.05 * syn)`, i.e. efficacy rises with release-site
+# count and saturates. Release sites are drawn at a level that keeps the
+# network SILENT AT REST but propagative when a channel drives it -- both
+# measured (tools/probe_demo_propagation.py):
+#     rest, no input      : 0 spikes
+#     taste, 40 nA at 290 : reaches the SEZ motor cells, opens the mouth
+def _release_sites(rng) -> int:
+    return rng.randint(*RELEASE_SITES_RANGE)
+
+
+def _efficacy_for(synapse_count: int) -> float:
+    # BANC's saturation curve, applied to the demo so both assets speak the
+    # same "efficacy x release sites" language the engine reads.
+    return min(1.0, 0.25 + 0.05 * synapse_count)
+
+
+RELEASE_SITES_RANGE = (18, 60)
+
+
 def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
     import random
     rng = random.Random(seed)
@@ -297,6 +338,15 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
         (RegionID.MUSHROOM_BODY, RegionID.SUPERIOR_BRAIN, -1, TransmitterType.GABAERGIC, (1, 2)),  # modulatory/inhibitory fan-out
         (RegionID.CENTRAL_COMPLEX, RegionID.SUBESOPHAGEAL_ZONE, +1, TransmitterType.CHOLINERGIC, (1, 3)),
         (RegionID.SUPERIOR_BRAIN, RegionID.SUBESOPHAGEAL_ZONE, +1, TransmitterType.CHOLINERGIC, (1, 3)),
+        (RegionID.SUBESOPHAGEAL_ZONE, RegionID.SUBESOPHAGEAL_ZONE, +1, TransmitterType.CHOLINERGIC, (2, 4)),
+        # SEZ recurs on itself. Real BANC has 50,226 recurrent edges inside the
+        # subesophageal zone (measured, `tools/probe_mouth_opens_itself.py`) and
+        # the feeding loop NEEDS that: the taste afferent reports INTO the SEZ,
+        # and the motor cells that extend the proboscis live in the same
+        # neuropil. With only SEZ->VNC descending edges the taste cell had no
+        # path to the mouth motor cells at all, so the mouth could never open
+        # itself and the feeding loop was a circle (TASK-005).
+        (RegionID.SUBESOPHAGEAL_ZONE, RegionID.SUBESOPHAGEAL_ZONE, +1, TransmitterType.CHOLINERGIC, (2, 4)),
         (RegionID.SUBESOPHAGEAL_ZONE, RegionID.VENTRAL_NERVE_CORD, +1, TransmitterType.CHOLINERGIC, (2, 4)),
         (RegionID.VENTRAL_NERVE_CORD, RegionID.LEG_NEUROMERE, +1, TransmitterType.GLUTAMATERGIC, (2, 5)),
         (RegionID.VENTRAL_NERVE_CORD, RegionID.WING_NEUROPIL, +1, TransmitterType.GLUTAMATERGIC, (2, 4)),
@@ -395,12 +445,13 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
             n = rng.randint(*crange)
             posts = [rng.randrange(t_s, t_e) for _ in range(n)]
             for post in posts:
+                ss = _release_sites(rng)
                 conns[pre].append((
                     post,
                     TransmitterType(int(trans)),
                     sign,
-                    rng.randint(1, 3),   # synapseCount
-                    rng.uniform(0.1, 0.6),  # estimatedEfficacy (INFERRED)
+                    ss,                      # synapseCount (CALIBRATED, see below)
+                    _efficacy_for(ss),       # estimatedEfficacy (INFERRED)
                     rng.randint(0, 100),    # confidence (INFERRED → modest)
                 ))
 

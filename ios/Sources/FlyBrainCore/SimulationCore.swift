@@ -27,6 +27,32 @@ public protocol WorldProvider: AnyObject {
     /// reach the substrate, so it falls off far more sharply than the volatile
     /// odor field the antennae sample from a distance.
     func tasteAcceptance(atX: Float, y: Float, z: Float) -> Float
+    /// Remove up to `amount` of edible matter in contact reach of the point, and
+    /// return what was actually taken (0 if nothing edible is there).
+    ///
+    /// Ingestion is a WORLD operation, not a state flip: the fly's energy must
+    /// come from matter that leaves the substrate, or the feeding loop has no
+    /// quantity in it and "eating" becomes a boolean. A provider that supplies a
+    /// sensory field but cannot be consumed makes feeding decorative, which is
+    /// exactly what `InternalState.feed()` had no consumer for.
+    ///
+    /// Conformers must implement this; `ingest` is defaulted to 0 below ONLY for
+    /// read-only test fields, and that default is visible in `isConsumable` so a
+    /// loop wired against a non-consumable world reports itself instead of
+    /// silently never feeding.
+    func ingest(atX: Float, y: Float, z: Float, amount: Float) -> Float
+}
+
+extension WorldProvider {
+    /// A world that cannot be eaten from. Test fixtures that only exercise
+    /// vision/odor return 0, and `isConsumable` says so, so a feeding test
+    /// written against one fails loudly instead of passing vacuously.
+    public func ingest(atX: Float, y: Float, z: Float, amount: Float) -> Float {
+        _ = (atX, y, z, amount)
+        return 0
+    }
+    /// Whether this provider can actually give up matter to the fly.
+    public var isConsumable: Bool { false }
 }
 
 /// Center of the simulation. Owns the fly's brain + body + the loop drivers.
@@ -132,6 +158,26 @@ public final class SimulationCore: @unchecked Sendable {
     public private(set) var lastTasteAcceptanceForTesting: Float = 0
     /// True when the proboscis was open far enough for the labellar route.
     public private(set) var proboscisReachedForTesting = false
+    /// Total edible reserve the fly has swallowed (reserve units).
+    ///
+    /// Reported because "did it eat" and "did it gain energy" are different
+    /// claims: a loop that flips `feedingState` without moving matter would
+    /// pass a state-only test, so the test reads the quantity that left the
+    /// substrate instead.
+    public private(set) var ingestedReserveForTesting: Float = 0
+
+    /// Ingestion rate while the labellum is on food (reserve units per ms of
+    /// neural time). A rate, not a per-bite constant, so a meal scales with how
+    /// long the animal stays on the source — which is what makes stopping
+    /// meaningful and lets a source run out mid-meal.
+    ///
+    /// 0.002/ms = 2.0 reserve units per neural second. With the metabolic clock
+    /// (InternalState.metabolicHoursPerNeuralHour) a full reserve refills a
+    /// drained fly in well under a second of neural time — food is a
+    /// high-value event on this timescale, as it is for a real fly.
+    public static let ingestionRatePerMs: Float = 0.002
+    /// Energy gained per reserve unit swallowed.
+    public static let energyPerReserveUnit: Float = 1.0
 
     public init(connectome: Connectome,
                 parameters: SimulationParameters = SimulationParameters()) {
@@ -229,20 +275,51 @@ public final class SimulationCore: @unchecked Sendable {
             // proboscis, and the labellum then confirms. Sampling tarsal taste
             // at the ground contact point (gated on real stance, not on the
             // mouth) is what makes the first taste possible.
-            let tarsalTaste = tasteAtTarsus(w)
+            let tarsalTaste = hungerModulated(tasteAtTarsus(w))
             if tarsalTaste != 0 {
                 sensoryInputs += sensory.gustatoryInput(acceptance: tarsalTaste)
                 tasteSampledForTesting = true
                 lastTasteAcceptanceForTesting = tarsalTaste
             }
-            let labellarTaste = tasteAtProboscisTip(w)
+            let labellarTaste = hungerModulated(tasteAtProboscisTip(w))
             if labellarTaste != 0 {
                 sensoryInputs += sensory.gustatoryInput(acceptance: labellarTaste)
                 tasteSampledForTesting = true
                 lastTasteAcceptanceForTesting = labellarTaste
+                // The mouth is out and on a substrate — a motor fact, recorded
+                // as one.
+                internalState.probe()
+            }
+
+            // INGESTION (spec #29). Taste tells the fly food is there; the meal
+            // is the matter that actually leaves the substrate. This is the call
+            // site `InternalState.feed()` never had.
+            //
+            // Two physical conditions, neither a decision:
+            //   1. the labellum is tasting a PHAGOSTIMULANT (taste > 0), so the
+            //      mouth is on food and not on a bitter surface; a fly does not
+            //      swallow a deterrent.
+            //   2. the proboscis is at contact reach — the same joint-angle
+            //      predicate the taste sense uses, so the fly cannot eat without
+            //      its mouth being out.
+            // The amount is a rate over the step, so energy tracks time spent
+            // feeding AND the food's remaining reserve, and a fly that arrives
+            // at an exhausted source gains nothing.
+            if labellarTaste > 0, FlyBody.proboscisReaches(body.proboscis.angle) {
+                let tip = proboscisTipPosition
+                let taken = w.ingest(atX: tip.x, y: tip.y, z: tip.z,
+                                     amount: Float(dt) * Self.ingestionRatePerMs)
+                if taken > 0 {
+                    internalState.feed(amount: taken * Self.energyPerReserveUnit)
+                    ingestedReserveForTesting += taken
+                }
             }
         }
         // internal-state modulation → sensory gain (spec #24)
+        // Arousal raises ALL sensory input (octopamine-like). Hunger does NOT
+        // belong here: it modulates gustatory input by sign, and that cannot be
+        // expressed as a scalar on the channel. It is applied to the taste
+        // SAMPLE below, where the valence is still known.
         let gain = internalState.sensoryGain
         for s in sensoryInputs {
             engine.injectCurrent(into: s.neuron, current: s.current * gain, at: engine.currentTimeMs + s.delayMs)
@@ -282,11 +359,61 @@ public final class SimulationCore: @unchecked Sendable {
     public var proboscisTipPosition: SIMD3<Float> {
         let headPos = body.head.position
         let angle = body.proboscis.angle
-        // +x body axis is forward, so the proboscis points forward and down as
-        // the joint opens; at full extension it reaches `proboscisLengthMm`.
-        let out = SIMD3<Float>(cos(angle), -sin(angle), 0)
-        let tip = headPos + out * (FlyBody.proboscisLengthMm * min(max(angle / 1.4, 0), 1))
+        // The proboscis swings forward and down; how far it has travelled is
+        // `proboscisExtensionFraction`, the SAME quantity the reach predicate
+        // and `labellumHeightAboveGroundMm` use. The head segment's y is 0, so
+        // the tip's height above the ground is entirely `standHeightMm` minus
+        // this descent — which is why the tip's own geometry is what decides
+        // whether the mouth can touch food at all.
+        let frac = FlyBody.proboscisExtensionFraction(angle: angle)
+        let tip = headPos + SIMD3<Float>(cos(angle), -sin(angle), 0)
+            * (FlyBody.proboscisLengthMm * frac)
         return dynamics.position + dynamics.body.rotate(tip)
+    }
+
+    /// Taste acceptance modulated by hunger, with the SIGN kept meaningful.
+    ///
+    /// Hunger is applied here rather than to the channel's current because the
+    /// two directions must be modulated differently (see
+    /// `InternalState.gustatoryAppetitiveGain` for why, and for the citation).
+    /// Applying it at the sample is what keeps that distinction expressible:
+    /// downstream, a `SensoryInput` carries one signed number and no longer
+    /// remembers which side of zero it came from.
+    ///
+    /// Both directions are pushed through absolute value and re-signed, so the
+    /// sign can never flip: a phagostimulant stays appetitive and an aversive
+    /// stays aversive no matter how hungry the fly is.
+    private func hungerModulated(_ acceptance: Float) -> Float {
+        guard acceptance != 0 else { return 0 }
+        let g = acceptance > 0 ? internalState.gustatoryAppetitiveGain
+                               : internalState.gustatoryAversiveGain
+        return (acceptance < 0 ? -1 : 1) * min(abs(acceptance) * g, 1)
+    }
+
+    /// Hunger-modulated taste, exposed for the sign-preservation test.
+    ///
+    /// The rule is tested through the same function the loop uses rather than
+    /// through a test-local copy of it: a test that reimplements the thing it is
+    /// checking passes whether or not the production path is correct, which is
+    /// how a single unsigned gain could have shipped here.
+    public func modulatedTasteForTesting(_ acceptance: Float) -> Float {
+        hungerModulated(acceptance)
+    }
+
+    /// Set the animal's energy reserve from a test.
+    ///
+    /// `internalState` and `body` are `private(set)` — a test cannot write
+    /// them directly, and `core.energy = ...` / `core.body.proboscis.angle = ...`
+    /// in a test file is a COMPILE error, which is exactly what the first draft
+    /// of `FeedingLoopTests` was. These go through the owning type so a restore
+    /// path (which must also refresh any derived state) stays in one place
+    /// rather than being open-coded by each caller.
+    public func setEnergyForTesting(_ value: Float) {
+        internalState.setEnergyForTesting(value)
+    }
+
+    public func setProboscisAngleForTesting(_ angle: Float) {
+        body.proboscis.angle = angle
     }
 
     /// Taste acceptance at the tarsus (feet on substrate).
@@ -471,7 +598,7 @@ public final class SimulationCore: @unchecked Sendable {
         for i in 0..<body.halteres.count {
             body.halteres[i].beatFrequency = hb * 180
         }
-        body.proboscis.angle = motor.proboscisDrive * 0.8
+        body.proboscis.angle = motor.proboscisDrive * FlyBody.proboscisMaxAngle
         body.leftAntenna.angle = 0.2 + motor.output.antennaAngle
         body.rightAntenna.angle = -0.2 + motor.output.antennaAngle
     }

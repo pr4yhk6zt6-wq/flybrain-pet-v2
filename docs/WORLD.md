@@ -5,10 +5,24 @@
 A miniature 3D environment where every object exposes **sensory properties** —
 the world is the source of stimulation, never the source of commands.
 
-Objects (planned):
+Objects (implemented, and what is still missing):
 
-- FOOD → odor + taste + texture + energy
+- FOOD → odor + taste + **finite reserve → energy** ✅
+  Ingestion is real: `World.ingest` removes reserve until the patch is bare, so
+  the energy the fly gains is the matter that left the substrate. The patch has
+  a radius because the fly's tarsi and its extended labellum are ~1.2 mm apart —
+  a point source could not be touched by both, and the tarsal→labellar bootstrap
+  would be physically impossible.
+  ⚠️ **TEXTURE IS NOT MODELLED.** This line previously promised it. It is a real
+  sense (Li & Montell, *Neuron* 2022, PMID 36386873: labellar mechanosensilla
+  report grittiness and flies reject gritty food) but there is no `texture` field
+  and nothing reads one; inventing the field would repeat the unread-variable
+  bug this project keeps finding. Substrate mechanosensation that *is* modelled
+  arrives via the tarsal load channel.
 - WATER → odor + contact + hydration
+  ⚠️ Water does not deplete (`OdorSource.isNutritive` is false for `.water`, so
+  it is neither swallowed nor drunk-from). `hydration` currently only falls;
+  the thirst half of the loop is NOT closed.
 - FRUIT / FERMENTED MATERIAL → strong odor + nutrition
 - LEAVES / BRANCHES → visual + tactile surfaces
 - WALLS / OBSTACLES → visual + tactile

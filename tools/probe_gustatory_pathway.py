@@ -64,6 +64,32 @@ def swift_float(src: str, name: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def read_joint_amplitude(core_src: str, body_src: str) -> float | None:
+    """The joint angle a SATURATED drive produces: `proboscisDrive * <amp>`.
+
+    The amplitude may be a bare literal or a named `FlyBody` constant. The
+    first version of this gate only matched a literal, so naming the constant
+    (which was the right change — the number is shared by the write site, the
+    reach predicate and the tip geometry) silently turned this check into a
+    FAIL. Resolving both forms keeps the check honest either way: it is the
+    VALUE that has to clear the threshold, not the spelling.
+
+    Returns None if the write site cannot be found at all, which is itself a
+    failure (the gate must not pass by finding nothing).
+    """
+    m = re.search(r"body\.proboscis\.angle\s*=\s*motor\.proboscisDrive\s*\*\s*"
+                  r"([A-Za-z_][A-Za-z0-9_.]*|[0-9.]+)", core_src)
+    if not m:
+        return None
+    token = m.group(1)
+    try:
+        return float(token)
+    except ValueError:
+        pass
+    name = token.rsplit(".", 1)[-1]
+    return swift_float(body_src, name)
+
+
 def load_targets(path: Path):
     """Replicate `selectInputNeuron` pass order for a side-0 request."""
     hdr, blocks = parse(str(path))
@@ -108,13 +134,21 @@ def main() -> int:
     length = swift_float(body_src, "proboscisLengthMm")
     check(reach is not None, "the proboscis reach threshold is declared in Swift")
     check(length is not None, "the extended proboscis length is declared in Swift")
-    # The joint the loop writes is `motor.proboscisDrive * 0.8` (SimulationCore
-    # syncBody) and limits are (0 .. 1.4). A threshold above the maximum the
-    # drive can ever produce makes taste unreachable for a saturated fly.
-    m = re.search(r"body\.proboscis\.angle\s*=\s*motor\.proboscisDrive\s*\*\s*([0-9.]+)",
-                  core_src)
-    amp = float(m.group(1)) if m else None
-    check(amp is not None, "the proboscis angle the loop writes is written with a known amplitude")
+    # The joint the loop writes is `motor.proboscisDrive * <amplitude>`
+    # (SimulationCore.applyArticulation) and the drive saturates at 1, so the
+    # amplitude IS the maximum angle a saturated fly can produce. A threshold
+    # above it makes taste unreachable for every fly.
+    #
+    # The amplitude may be a literal or a NAMED constant. It became
+    # `FlyBody.proboscisMaxAngle` when the same number was needed by three
+    # things (the write site, the reach predicate, the tip geometry) — an
+    # unnamed literal in one file cannot be checked against a predicate in
+    # another. This gate follows the name and resolves it from BodyModel.swift,
+    # so naming the constant does not make the check vacuous: a constant that
+    # is wrong (say 0.2 < reach 0.35) still fails here.
+    amp = read_joint_amplitude(core_src, body_src)
+    check(amp is not None, "the proboscis angle the loop writes is written with a known amplitude",
+          "" if amp is None else f"amplitude {amp:.2f} rad at full drive")
     if reach is not None and amp is not None:
         max_angle = amp * 1.0          # proboscisDrive saturates at 1
         check(max_angle > reach,
@@ -143,9 +177,27 @@ def main() -> int:
     check(tip_sampled, "taste is sampled at the proboscis tip position")
 
     # ---- 5. the sense must be a contact sense -----------------------------
-    contact = bool(re.search(r"let reach: Float = ([0-9.]+)", world_src))
-    check(contact, "the world's taste falloff has a fixed, stated reach "
-          "(a contact sense, not the odor diffusion radius)")
+    # The reach must be a declared constant, and it must be a CONTACT reach —
+    # not the odour diffusion radius wearing a taste sensor's name. Resolve the
+    # name the taste falloff actually divides by rather than matching one
+    # spelling: `contactReach` moved into `OdorSource` (shared with ingestion,
+    # so the fly has one mouth and not two), and a gate pinned to the old
+    # spelling failed on a change that made the code MORE correct.
+    reach_name = re.search(r"static let (contactReach)\s*:\s*Float\s*=\s*([0-9.]+)", world_src)
+    uses_declared = bool(re.search(r"1\s*-\s*d\s*/\s*(?:Self\.|OdorSource\.)?contactReach", world_src))
+    check(reach_name is not None and uses_declared,
+          "the world's taste falloff has a fixed, stated reach "
+          "(a contact sense, not the odor diffusion radius)",
+          f"{reach_name.group(1)} = {reach_name.group(2)} mm" if reach_name else
+          "no declared contact reach found")
+    # And the reach must be SHORTER than the odour plume, or taste is a second
+    # smell channel: compare the contact reach against the odour falloff's
+    # characteristic distance.
+    diffusion = swift_float(world_src, "diffusionConstant")
+    if reach_name and diffusion:
+        check(float(reach_name.group(2)) < diffusion,
+              "the contact reach is shorter-range than the odour plume "
+              f"({reach_name.group(2)} mm < D = {diffusion})", "")
 
     # water/pheromone must be neutral so taste != "second odor channel"
     neutral = "case .water, .pheromone: return 0" in world_src
@@ -189,7 +241,7 @@ def main() -> int:
     # over the joint angles the motor system can produce, to show that the
     # tarsal sample fires where the labellar sample cannot.
     reach = float(re.search(r"proboscisReachAngle: Float = ([0-9.]+)", body_src).group(1))
-    max_angle = 0.8   # motor writes `proboscisDrive * 0.8`, checked in #4
+    max_angle = read_joint_amplitude(core_src, body_src)  # same source as #4, not re-typed
 
     def tarsal_fires(grounded, on_food):
         # gated on stance only

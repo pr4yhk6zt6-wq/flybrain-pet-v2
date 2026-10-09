@@ -53,6 +53,15 @@ public struct FlyBody {
     /// folded and contact chemoreception is not possible, however close the
     /// fly is standing.
     public static let proboscisReachAngle: Float = 0.35
+    /// Joint angle (rad) written when the motor drive is at maximum.
+    ///
+    /// This used to be a bare `0.8` multiplied into `body.proboscis.angle` at
+    /// the articulation site. Naming it is not tidiness: the reach predicate
+    /// `proboscisReaches` and the tip geometry both have to agree with it, and
+    /// an unnamed literal in one file cannot be checked against a predicate in
+    /// another. See `labellumGroundReachAngleMm` for the constraint it must
+    /// satisfy.
+    public static let proboscisMaxAngle: Float = 0.8
 
     /// Whether a proboscis at `angle` is open far enough for the labellum to
     /// touch a substrate. A pure predicate on the joint state, so the contact
@@ -61,6 +70,41 @@ public struct FlyBody {
     /// value the next step overwrites.
     public static func proboscisReaches(_ angle: Float) -> Bool {
         angle >= proboscisReachAngle
+    }
+
+    /// How far the proboscis is extended, 0 (folded) to 1 (full travel).
+    ///
+    /// The denominator is `proboscisMaxAngle`, NOT `proboscisReachAngle`. The
+    /// earlier code divided by a hard-coded `1.4` at the tip-geometry site (and
+    /// the tip's geometry was the only place extension was computed), so at the
+    /// motor's full drive of 0.8 the proboscis reached only 0.8/1.4 = **57%** of
+    /// its length. The reach predicate meanwhile called 0.35 rad "open", so the
+    /// two disagreed about what extending meant, and the disagreement was
+    /// invisible because each site was self-consistent.
+    ///
+    /// The consequence was that the labellum could not descend to the ground.
+    /// The tip hangs off the head segment (offset y = 0) while the fly stands at
+    /// `standHeightMm` = 0.8, and the proboscis only descends by sin(angle)
+    /// times the fraction extended — so at 57% extension the tip sat **0.431 mm**
+    /// above the ground against a `contactReach` of 0.25 mm. No joint angle
+    /// could touch food, meaning labellar taste and ingestion were unreachable
+    /// for every fly, and the gustatory pathway's tarsal bootstrap could open a
+    /// mouth that had nowhere to go. Returning the true extension is what makes
+    /// the tip reach 0.153 mm at full drive — inside contact reach.
+    public static func proboscisExtensionFraction(angle: Float) -> Float {
+        min(max(angle / proboscisMaxAngle, 0), 1)
+    }
+
+    /// Height of the labellum tip above the ground plane (mm) at a given joint
+    /// angle, for a fly standing at `standHeightMm`.
+    ///
+    /// Returned rather than asserted so `tools/mirror_feeding_loop.py` can check
+    /// the real number against the reach constants instead of trusting a
+    /// comment — which is how the gap above went unnoticed in the first place.
+    public static func labellumHeightAboveGroundMm(angle: Float,
+                                                   standHeightMm: Float) -> Float {
+        let frac = proboscisExtensionFraction(angle: angle)
+        return standHeightMm - sin(angle) * proboscisLengthMm * frac
     }
 
     // Segments

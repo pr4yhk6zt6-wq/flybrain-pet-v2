@@ -69,8 +69,16 @@ jobs:
         run: python tools/probe_looming_pathway.py
       - name: Gustatory pathway (the channel must be driven, reachable and gated)
         run: python tools/probe_gustatory_pathway.py
+      - name: Feed-forward pathway (SEZ must reach every effector region)
+        run: python tools/probe_feedforward_pathway.py
+      - name: Metabolism clock (a session must be able to contain hunger)
+        run: python tools/measure_metabolism_balance.py
+      - name: Feeding loop mirror (hunger has a consumer; a meal is matter)
+        run: python tools/mirror_feeding_loop.py
       - name: App stimulus reachability (the shipped app must be able to fire each channel)
         run: python tools/probe_app_stimulus_reachability.py
+      - name: Mouth opens itself (the shipped asset must not be an inert connectome)
+        run: python tools/probe_mouth_opens_itself.py
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py

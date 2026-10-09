@@ -66,6 +66,28 @@ biology in the app.
   the same rule (rate ≈ 1/τ), which is how `loomExpansionReference` is defined.
 - Bahl et al. — looming/escape circuits (giant fiber system, DLM).
 - Card & Dickinson — escape takeoff biomechanics.
+- **Inagaki, Panse & Anderson. "Independent, reciprocal neuromodulatory control
+  of sweet and bitter taste sensitivity during starvation in *Drosophila*."
+  *Neuron* 84:806 (2014). PMID 25451195.** — MEASURED: starvation raises sugar
+  sensitivity and LOWERS bitter sensitivity, as separate pathways "recruited at
+  increasing hunger levels, such that low-risk changes (higher sugar
+  sensitivity) precede high-risk changes (lower sensitivity to potentially toxic
+  resources)". This is why the model has TWO gustatory gains and an onset
+  (`aversiveBluntingOnsetHunger`) rather than one unsigned multiplier — a single
+  gain would make a starving fly *more* repelled by bitter food, backwards on
+  the nutrient state where it most needs calories. Measured: direction and
+  ordering. INFERRED: the curve shapes and the two span values.
+- **Li & Montell. "Mechanosensory encoding of food texture in *Drosophila*."
+  *Neuron* (2022). PMID 36386873.** — MEASURED: labellar mechanosensilla detect
+  food grittiness via bristle deflection and flies reject gritty food. Recorded
+  here because it is a REAL sense this model does NOT implement — see
+  docs/WORLD.md. Called out explicitly so the absence reads as a known gap
+  rather than as a claim that texture is pseudo-science.
+- (feeding) Tarsal vs labellar contact chemoreception and the proboscis
+  extension reflex: the tarsal route can itself release extension, which is what
+  makes the tarsal→labellar bootstrap in `SensoryInterface` physically sensible.
+  The model's `contactReach` (0.25 mm) and patch radius are OPTIMISATION
+  constants, not measured sensitivities — see `tools/mirror_feeding_loop.py`.
 - Strauss — leg coordination & walking mutants.
 - Yamada et al. — grooming sequence.
 - von Philipsborn et al. — courtship song (male; NOT used for female default).

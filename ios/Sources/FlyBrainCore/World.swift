@@ -57,21 +57,86 @@ public struct OdorSource: Sendable {
     public var kind: Kind
     public var emissionRate: Float      // source strength
     public var diffusionConstant: Float // spatial spread
+    /// How much food is here, in reserve units (1.0 = one full meal).
+    ///
+    /// Food is finitely available, which is what makes a feeding loop a loop
+    /// rather than a tap: a source that never depletes lets the fly feed
+    /// forever, so `energy` becomes monotone and hunger is unreachable again.
+    /// This is what ingestion decrements — and the amount is REMOVED, so the
+    /// energy the fly gains is bounded by what it actually ate.
+    ///
+    /// Water does not deplete: drinking a puddle is not a finite-resource
+    /// problem at the scale of one fly, and the app exposes `dropWater` as a
+    /// standing source.
+    public var reserve: Float
+    /// Patch radius (mm): food is a patch with extent, not a mathematical point.
+    ///
+    /// This is not cosmetic. The fly stands ~0.8 mm up with its tarsi at the
+    /// body position and its extended labellum ~1.2 mm FORWARD of them
+    /// (`BodyModel`: head at +0.6, proboscis 0.9 at full extension). A point
+    /// source can therefore be under the feet or at the mouth but never both, so
+    /// with a zero-radius source the bootstrap the whole gustatory pathway rests
+    /// on — taste it with your feet, extend, confirm with your labellum — cannot
+    /// happen at one spot. Real food is a patch; giving it a radius is the
+    /// smaller lie, and it is stated here rather than hidden in a constant.
+    ///
+    /// Radius default is 1.1 mm so the patch spans the 1.23 mm from the tarsi to
+    /// the extended labellum (`tools/mirror_feeding_loop.py` fails if it stops
+    /// doing so). A ~2.2 mm food blob is unremarkable next to a 2.5-3 mm fly,
+    /// and it is what makes the pathway's bootstrap physically possible: the
+    /// same patch has to be touchable by the feet AND the mouth, which no
+    /// zero-radius source can be.
+    public var radius: Float
 
     public init(position: SIMD3<Float>, kind: Kind, emissionRate: Float = 1,
-                diffusionConstant: Float = 1) {
+                diffusionConstant: Float = 1, reserve: Float = 1,
+                radius: Float = 1.1) {
         self.position = position
         self.kind = kind
         self.emissionRate = emissionRate
         self.diffusionConstant = diffusionConstant
+        self.reserve = max(reserve, 0)
+        self.radius = max(radius, 0)
+    }
+
+    /// Distance from `p` to the nearest point of the patch (0 when inside).
+    ///
+    /// The contact senses measure this, not centre distance: standing on the
+    /// edge of a food patch is standing ON the food, and the labellum touching
+    /// the edge is touching it.
+    public func distanceToPatch(from p: SIMD3<Float>) -> Float {
+        max(FlyMath.length(p - position) - radius, 0)
+    }
+
+    /// Whether this source can be swallowed at all. An aversive substance
+    /// carries taste but is not food; a pheromone is a courtship signal. Only a
+    /// phagostimulant has anything to ingest, so `reserve` and `emissionRate`
+    /// are not silently treated as nutrition for every kind.
+    public var isNutritive: Bool {
+        switch kind {
+        case .food, .fermentation: return true
+        case .water, .aversive, .pheromone: return false
+        }
     }
 
     /// Concentration at a point (gaussian-ish falloff; bilateral sampling
     /// happens per antenna in SensoryInterface).
+    ///
+    /// Scaled by the remaining reserve: a depleted source stops smelling, so
+    /// the fly's own feeding changes what it can sense next. Without this the
+    /// odor field would keep advertising a source that has nothing left.
     public func concentration(at p: SIMD3<Float>) -> Float {
         let d = FlyMath.length(p - position)
-        return emissionRate * exp(-d * d / (2 * diffusionConstant))
+        return emissionRate * reserve * exp(-d * d / (2 * diffusionConstant))
     }
+
+    /// Contact reach of the labellum's sensilla (mm).
+    ///
+    /// This is a CONTACT sense's reach, not a smell radius: ~0.25 mm is the
+    /// scale of a labellum sensillum. It is declared once and used by BOTH the
+    /// taste sense and ingestion, because a fly that could swallow a source it
+    /// could not taste (or vice versa) would have two different mouths.
+    public static let contactReach: Float = 0.25
 
     /// Taste acceptance when the proboscis tip touches `at`.
     ///
@@ -88,6 +153,18 @@ public struct OdorSource: Sendable {
     ///   water / pheromone   → 0 (drives drinking / courtship, not feeding)
     /// `pheromone` is deliberately excluded: it is a courtship signal, and a
     /// fly that "tastes" a mate is a category error.
+    ///
+    /// Note there is no `texture` term here, and that is a deliberate limitation
+    /// rather than a claim that texture is imaginary. The substrate's texture IS
+    /// a real food cue in *Drosophila* — Li & Montell, *Neuron* 2022
+    /// (PMID 36386873) show labellar mechanosensilla report food grittiness via
+    /// bristle deflection, and flies reject gritty food. So texture is a genuine
+    /// sense this model does not have: it lives on the mechanosensory channel
+    /// (`SensoryInterface.touchAfferent`) and would need a per-source
+    /// `grit`/hardness field to be represented. It is NOT represented, and
+    /// saying so is better than adding a `texture: Float` that nothing reads —
+    /// the failure mode this project keeps finding. Mechanosensation of the
+    /// substrate that IS modelled arrives through the tarsal load channel.
     public func tasteAcceptance(at p: SIMD3<Float>) -> Float {
         let valence: Float
         switch kind {
@@ -95,10 +172,13 @@ public struct OdorSource: Sendable {
         case .aversive: valence = -1
         case .water, .pheromone: return 0
         }
-        let d = FlyMath.length(p - position)
-        let reach: Float = 0.25
-        let falloff = max(1 - d / reach, 0)
-        return valence * emissionRate * falloff * falloff
+        // A depleted source has nothing left to taste; otherwise the fly would
+        // keep finding food at a spot it has already eaten bare.
+        // Distance is to the patch EDGE (see `distanceToPatch`): the labellum
+        // touching the rim of a food patch is touching food.
+        let d = distanceToPatch(from: p)
+        let falloff = max(1 - d / Self.contactReach, 0)
+        return valence * emissionRate * reserve * falloff * falloff
     }
 }
 
@@ -232,6 +312,47 @@ public final class World: WorldProvider, @unchecked Sendable {
         }
     }
 
+    // MARK: - Ingestion (spec #29: the world supplies matter, not decisions)
+
+    /// Remove up to `amount` of edible reserve from the nearest source that can
+    /// reach `p`, and return what was ACTUALLY taken (0 if there is nothing
+    /// edible in reach).
+    ///
+    /// This is the world half of feeding, and it returns a measured quantity
+    /// rather than a boolean, so the energy the fly gains is the amount that
+    /// left the food. A "fed = true" flag would make the meal a constant and
+    /// the loop would no longer conserve anything.
+    ///
+    /// Only a `isNutritive` source with reserve left yields anything, and only
+    /// within the same contact reach the taste sense uses — the fly cannot
+    /// swallow a source it could not touch.
+    @discardableResult
+    public func ingest(at p: SIMD3<Float>, amount: Float) -> Float {
+        guard amount > 0 else { return 0 }
+        var best = -1
+        var bestDist = Float.greatestFiniteMagnitude
+        for (i, s) in odorSources.enumerated() where s.isNutritive && s.reserve > 0 {
+            let d = s.distanceToPatch(from: p)
+            guard d <= OdorSource.contactReach else { continue }
+            if d < bestDist { bestDist = d; best = i }
+        }
+        guard best >= 0 else { return 0 }
+        let taken = min(amount, odorSources[best].reserve)
+        odorSources[best].reserve -= taken
+        return taken
+    }
+
+    /// How much edible reserve is within contact reach of `p` (for telemetry).
+    public func edibleReserve(at p: SIMD3<Float>) -> Float {
+        var total: Float = 0
+        for s in odorSources where s.isNutritive && s.reserve > 0 {
+            if s.distanceToPatch(from: p) <= OdorSource.contactReach {
+                total += s.reserve
+            }
+        }
+        return total
+    }
+
     public func removeAllOdorSources() { odorSources.removeAll() }
 
     /// Toggle the light set (player interaction — environment only, spec #42).
@@ -339,14 +460,27 @@ public final class World: WorldProvider, @unchecked Sendable {
         return groundTemperatureC - max(0, y) * 0.2
     }
 
+    /// This world does give up matter — the loop can actually feed here.
+    public var isConsumable: Bool { true }
+
+    public func ingest(atX: Float, y: Float, z: Float, amount: Float) -> Float {
+        ingest(at: SIMD3(atX, y, z), amount: amount)
+    }
+
     // MARK: - Taste (contact chemoreception, spec #14)
 
     /// Taste acceptance at a point: **positive** when the point is on a
     /// phagostimulant source (food), **negative** on an aversive one, and 0
     /// where there is nothing the labellum could touch. Water is neither — it
-    /// drives drinking through the hydration term, not through acceptance, so
-    /// it must not read as a food taste: an animal that cannot tell sugar from
-    /// water is not tasting.
+    /// must not read as a food taste, because an animal that cannot tell sugar
+    /// from water is not tasting.
+    ///
+    /// HONESTY: the original sentence here said water "drives drinking through
+    /// the hydration term". That consumer does not exist. `InternalState.drink()`
+    /// has no caller anywhere in the app or the pipeline (grep-verified), and
+    /// `OdorSource.Kind.water` is an ODOR source. Water is currently odor-only;
+    /// nothing hydrates. Recorded because a comment describing behaviour that
+    /// was never wired is how a gap survives review.
     ///
     /// The field is SHORTER-RANGE than odor by construction (contact sense),
     /// and it does not propagate as a cloud — see `OdorSource.tasteAcceptance`.

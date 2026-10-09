@@ -90,11 +90,43 @@ jobs:
           cp -R "$APP_PATH" build/Payload/
           cd build && zip -qry FlyBrainPet.ipa Payload
 
-      - name: Upload .ipa artifact
+      - name: Build device .app (unsigned, arm64 — sideloadable)
+        # Produces a real arm64 DEVICE build with signing switched off. This is
+        # NOT installable as-is: AltStore / Sideloadly must re-sign it with the
+        # user's own Apple ID. It exists because the signed path above needs a
+        # paid certificate that the repo may not have, and an unsigned device
+        # build is the only artifact a free Apple ID can actually install.
+        #
+        # Named `...-device` and kept SEPARATE from the simulator build, so the
+        # two are never confused: a simulator .app cannot run on a phone at all,
+        # and shipping one under a name that says `.ipa` looks installable while
+        # being inert.
+        working-directory: ios
+        run: |
+          xcodebuild -project FlyBrainPet.xcodeproj -scheme FlyBrainPet \
+            -configuration ${{ github.event.inputs.configuration || 'Release' }} \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedDataDeviceUnsigned \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" build
+          APP_PATH=$(find build/DerivedDataDeviceUnsigned/Build/Products -name '*.app' | head -1)
+          mkdir -p build/unsigned/Payload
+          cp -R "$APP_PATH" build/unsigned/Payload/
+          cd build/unsigned && zip -qry FlyBrainPet-unsigned-device.ipa Payload
+          echo "built: $(du -h FlyBrainPet-unsigned-device.ipa | cut -f1)"
+
+      - name: Upload download artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FlyBrainPet-ipa
+          name: FlyBrainPet-downloads
           path: |
             ios/build/FlyBrainPet.ipa
-            ios/build/DerivedData/Build/Products/Release-iphonesimulator/*.app
+            ios/build/unsigned/FlyBrainPet-unsigned-device.ipa
+          if-no-files-found: warn
+
+      - name: Upload simulator build (NOT installable on a device)
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlyBrainPet-simulator-only
+          path: ios/build/DerivedData/Build/Products/Release-iphonesimulator/*.app
           if-no-files-found: warn

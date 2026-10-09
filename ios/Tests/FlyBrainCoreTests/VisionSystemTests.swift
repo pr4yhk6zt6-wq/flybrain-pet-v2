@@ -198,9 +198,16 @@ final class VisionSystemTests: XCTestCase {
                 layout.first { $0.region == r }?.ids ?? []
             }
             var edges: [(Int32, Int32)] = []
-            // plate -> leg pool (the escape route the probe measures on assets)
-            if let f = ids(.lobulaPlate).last, let t = ids(.legNeuromere).first {
-                edges.append((f, t))
+            // EVERY plate neuron projects to the leg pool. Wiring only the last
+            // one made the fixture sensitive to which plate cell
+            // `selectInputNeuron` happens to pick — it walks the region index in
+            // ascending order and injects into the FIRST, so a single edge from
+            // the second left the escalated drive with nowhere to go (this
+            // failed in CI as "the escape route must be silent for a still
+            // scene", with plate>0 but leg==still). The route must not depend on
+            // an arbitrary index.
+            for plate in ids(.lobulaPlate) {
+                if let t = ids(.legNeuromere).first { edges.append((plate, t)) }
             }
             // leg pool self-sustaining
             let legs = ids(.legNeuromere)

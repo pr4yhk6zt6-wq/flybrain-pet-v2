@@ -399,7 +399,7 @@ final class FeedingLoopTests: XCTestCase {
         var peakLoad: Float = 0
         for _ in 0..<600 {
             core.step()
-            peakLoad = max(peakLoad, core.body.groundLoadFraction)
+            peakLoad = max(peakLoad, core.dynamics.groundLoadFraction)
         }
         XCTAssertLessThan(peakLoad, 1.5,
                           "the spawn launched the body \(peakLoad) body weights "

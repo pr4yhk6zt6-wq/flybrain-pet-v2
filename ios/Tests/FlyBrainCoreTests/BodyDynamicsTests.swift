@@ -190,6 +190,78 @@ final class BodyDynamicsTests: XCTestCase {
         XCTAssertEqual(fly.groundLoadFraction, 1.0, accuracy: 0.15)
     }
 
+    /// A spawn is a POSE, not an impact.
+    ///
+    /// `setPose` writes "on the substrate" as `groundY + standHeightMm`, which
+    /// is the height the *legs* hold the thorax at — not the height the contact
+    /// spring balances at. The spring must compress by `weight / stiffness`
+    /// before it can carry the weight, so placing the body at the unloaded
+    /// height buries it 0.78 mm and fires a 42-body-weight launch that drives
+    /// the tarsal channel for 67 steps (measured:
+    /// `tools/probe_rest_drive.py`). `testTheConnectomeIsSilentWithNoStimulus`
+    /// saw that transient as a spike in a world with no taste.
+    ///
+    /// Asserted as a physical statement, not a constant: the load at the spawn
+    /// must already BE body weight, because at the balance height the spring
+    /// carries the body without any settling.
+    func testSpawnIsAtForceBalanceNotAnImpact() {
+        var fly = BodyDynamics()
+        let p = fly.parameters
+        let balance = p.restHeightMm
+        // The balance height is the force balance, not a second constant.
+        XCTAssertEqual(balance,
+                       p.groundY + p.standHeightMm
+                       - p.bodyMassMg * p.gravityMmS2 / p.contactStiffness,
+                       accuracy: 1e-6)
+
+        // Spawning where the leg model holds the thorax is BELOW the balance
+        // height — that is the burial, and it is not a small one.
+        XCTAssertLessThan(balance, p.groundY + p.standHeightMm)
+        XCTAssertGreaterThan(p.groundY + p.standHeightMm - balance, 0.005,
+                            "the buried depth is what the launch comes from")
+
+        // The load a spawned fly feels is body weight from the FIRST step —
+        // no settling ramp, and above all no launch. At the unloaded stand
+        // height the first step reads ~42 (mirror: 42.16).
+        let silent = BodyMotorCommand()
+        var peakLoad: Float = 0
+        for _ in 0..<50 {
+            fly.step(command: silent, dt: 0.0001)
+            peakLoad = max(peakLoad, fly.groundLoadFraction)
+        }
+        XCTAssertEqual(fly.groundLoadFraction, 1.0, accuracy: 0.02,
+                       "a spawned fly must already be carrying its own weight, "
+                       + "not slamming into the substrate")
+        XCTAssertLessThan(peakLoad, 1.5,
+                          "peak load \(peakLoad) body weights over the first 50 "
+                          + "steps — a spawn that launches reads 40+")
+        XCTAssertTrue(fly.body.grounded)
+
+        // `setPose`-style requests at or below the stand height are snapped,
+        // so every existing call site (the tests' `groundY + standHeightMm`,
+        // the app's `y = 0.2`) lands at the balance height without being
+        // rewritten.
+        var posed = BodyDynamics()
+        posed.teleport(position: SIMD3(3, 0, 4),
+                       forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
+        XCTAssertEqual(posed.position.y, balance, accuracy: 1e-6)
+        XCTAssertEqual(posed.position.x, 3, accuracy: 1e-6,
+                       "snapping the HEIGHT must not move the fly horizontally")
+
+        var low = BodyDynamics()
+        low.teleport(position: SIMD3(0, 0.2, 0),
+                     forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
+        XCTAssertEqual(low.position.y, balance, accuracy: 1e-6)
+
+        // A spawn above the substrate is a real position and must be kept —
+        // yanking it down would teleport an airborne fly into the floor.
+        var flying = BodyDynamics()
+        flying.teleport(position: SIMD3(0, 5, 0),
+                        forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
+        XCTAssertEqual(flying.position.y, 5, accuracy: 1e-6)
+        XCTAssertFalse(flying.body.grounded)
+    }
+
     // MARK: - Walking is an outcome, and scales with drive
 
     /// Walking speed must track the stride setpoint implied by motor activity,

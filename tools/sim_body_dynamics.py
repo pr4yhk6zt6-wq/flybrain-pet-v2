@@ -65,8 +65,14 @@ def aerodynamics(amp, freq, asym=0.0, pitch_bias=0.0):
 class Body:
     """RigidBody (Y-up world). Body axes: +x forward, +y dorsal, +z right."""
 
+    # `PhysicsParameters.restHeightMm` in Swift: the height at which the
+    # contact spring carries the body's weight. A spawn belongs here, not at
+    # the unloaded STAND_HEIGHT, or the body starts buried and the solver
+    # launches it.
+    REST_HEIGHT = GROUND_Y + STAND_HEIGHT - MASS * GRAVITY / CONTACT_STIFFNESS
+
     def __init__(self):
-        self.pos = [0.0, GROUND_Y + STAND_HEIGHT, 0.0]
+        self.pos = [0.0, self.REST_HEIGHT, 0.0]
         self.vel = [0.0, 0.0, 0.0]
         self.normal = 0.0
         self.grounded = True
@@ -75,6 +81,14 @@ class Body:
         self.lift = 0.0
         self.stroke_amp = 0.0
         self.stroke_freq = 0.0
+        # Spawn-at-rest diagnostics (see `tools/probe_rest_drive.py`): the peak
+        # load the contact spring saw, and whether the body ever left the
+        # ground. Defaults describe a body already at rest, which is the
+        # correct reading of `Body()`; `teleport` re-seeds them.
+        self.peak_load = 0.0
+        self.bounces = 0
+        self.was_airborne = False
+        self.placed_y = self.pos[1]
 
     def forward(self):
         return [1.0, 0.0, 0.0]
@@ -93,13 +107,26 @@ class Body:
         actuator state belongs to the pose it was measured at, so it is cleared;
         carrying the stroke of the previous flight over would make the first
         frames report a wing beat that never happened."""
-        self.pos = list(pos)
+        pos = list(pos)
+        # Mirror of `BodyDynamics.teleport`: a spawn at or below the standing
+        # height is placed at the force-balance height.
+        if pos[1] <= GROUND_Y + STAND_HEIGHT:
+            pos[1] = self.REST_HEIGHT
+        self.pos = pos
         self.vel = list(vel) if vel else [0.0, 0.0, 0.0]
         self.stroke_amp = 0.0
         self.stroke_freq = 0.0
         self.wing_tip = 0.0
         self.lift = 0.0
         self.grounded = self.pos[1] <= GROUND_Y + STAND_HEIGHT
+        # Diagnostics for the spawn-at-rest gate: how hard the body was
+        # launched, and whether it left the ground during the run.
+        self.peak_load = self.normal / (MASS * GRAVITY)
+        self.bounces = 0
+        self.was_airborne = not self.grounded
+        # A body at the balance height is already carrying its own weight, so
+        # the contact it is standing on is live from the first step.
+        self.normal = MASS * GRAVITY if self.grounded else 0.0
 
     def step(self, fwd_target=0.0, lat_target=0.0, contact=1.0,
              legs_in_contact=True, amp=0.0, freq=0.0, asym=0.0,
@@ -157,6 +184,10 @@ class Body:
             elastic = CONTACT_STIFFNESS * penetration
             damping = CONTACT_DAMPING * self.vel[1]
             self.normal = max(0.0, elastic - damping)
+            self.peak_load = max(self.peak_load, self.normal / (MASS * GRAVITY))
+            if self.was_airborne:
+                self.bounces += 1
+                self.was_airborne = False
             self.vel[1] += (self.normal / MASS) * dt
             self.grounded = True
             if not legs_planted:
@@ -169,6 +200,7 @@ class Body:
         else:
             self.grounded = False
             self.normal = 0.0
+            self.was_airborne = True
         self.elapsed_ms += dt * 1000.0
         return accel
 

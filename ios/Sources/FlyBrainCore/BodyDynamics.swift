@@ -33,8 +33,47 @@ public struct PhysicsParameters: Sendable {
     /// Gravitational acceleration in mm/s². MEASURED (9.80665 m/s²).
     public var gravityMmS2: Float = 9806.65
     /// Height of the body origin (thorax centre) above the substrate while
-    /// standing (mm). APPROXIMATED from leg segment lengths.
+    /// standing (mm). APPROXIMATED from leg segment lengths. This is the
+    /// UNLOADED body height: standing legs hold the thorax here, and the
+    /// contact penalty then lets it settle to `restHeightMm` under its own
+    /// weight.
     public var standHeightMm: Float = 0.8
+
+    /// The height at which the contact penalty spring exactly carries the
+    /// body's weight, i.e. the body origin's settled rest height (mm).
+    ///
+    /// This is NOT a second free parameter — it is the force balance of the
+    /// two constants above and below it:
+    ///
+    ///     normalForce = contactStiffness * penetration  (at rest, no damping)
+    ///     weight      = bodyMassMg * gravityMmS2
+    ///     restHeight  = groundY + standHeightMm - weight / contactStiffness
+    ///
+    /// It exists because `setPose` dropped the body at the caller's RAW y, and
+    /// every caller writes a y at or below the balance height:
+    ///
+    ///   * `groundY + standHeightMm` (the tests) is the UNLOADED height, so the
+    ///     body then sags to equilibrium and injects for 36 steps;
+    ///   * `y = 0.2` (the app) and `y = 0` (the silence test) are 0.6-0.78 mm
+    ///     INTO the floor — a 33-42 body-weight launch that injects for
+    ///     118-67 steps.
+    ///
+    /// Measured (`tools/probe_rest_drive.py`). The load is overdamped (damping
+    /// 2500 > critical 1117), so the launch decays in place rather than
+    /// throwing the fly airborne — the load spike is the whole defect.
+    ///
+    /// The behaviour that leaks out of that transient is not the fly's, it is
+    /// the spawn's — and `testTheConnectomeIsSilentWithNoStimulus` was reading
+    /// it as a stimulus in a world that has none.
+    ///
+    /// Seeding the flight-relevant dynamic state at this height makes the
+    /// spawn a pose rather than an impact, so the first step is as quiet as
+    /// any later one. The unloaded `standHeightMm` is still the reference the
+    /// proboscis geometry and the tarsal clamp are written against; only the
+    /// spawn uses the balance height.
+    public var restHeightMm: Float {
+        groundY + standHeightMm - (bodyMassMg * gravityMmS2) / max(contactStiffness, 1)
+    }
 
     /// Overall body length, head to abdomen tip (mm). MEASURED order: an adult
     /// Drosophila is ≈ 2.5 mm long. Used as the contact extent when the fly
@@ -235,7 +274,14 @@ public struct BodyDynamics: Sendable {
         // the standing height into z (as this used to) left y = 0, so the fly
         // spawned buried in the ground plane and the contact solver jettisoned
         // it on the first step.
-        self.body.position = SIMD3(0, parameters.groundY + parameters.standHeightMm, 0)
+        //
+        // The height itself is `restHeightMm`, not `standHeightMm`: the leg
+        // model holds the thorax at the unloaded stand height, but the penalty
+        // contact has to compress by weight/stiffness before it can carry the
+        // weight. Starting at the unloaded height means starting 0.78 mm into
+        // the substrate — a 42-body-weight launch load that drives the tarsal
+        // channel for 67 steps before the spring settles.
+        self.body.position = SIMD3(0, parameters.restHeightMm, 0)
     }
 
     /// Position of the body centre (mm).
@@ -327,13 +373,33 @@ public struct BodyDynamics: Sendable {
         // Body right (+z) = f x u, body dorsal (+y) = right x f.
         let right = FlyMath.normalize(FlyMath.cross(f, u))
         let dorsal = FlyMath.normalize(FlyMath.cross(right, f))
-        body.position = position
+        // A spawn is not an impact. `setPose` passes the position callers
+        // *mean* — "on the substrate" is written as `groundY + standHeightMm`,
+        // and the app writes an origin-ish `y = 0.2`. Both are at or below the
+        // height the contact spring balances at, so taking them literally drops
+        // the body into the floor and the solver launches it. Measured
+        // (`tools/probe_rest_drive.py`): at `standHeightMm` the tarsal channel
+        // injects for 36 steps, at y=0 for 67, at the app's y=0.2 for 118 —
+        // and each of those is a transient the spawn created, not the fly.
+        // The height a spawn stands at is the force-balance height; calling it
+        // anything else leaves the transient to masquerade as stimulus.
+        var spawnPosition = position
+        if spawnPosition.y <= parameters.groundY + parameters.standHeightMm {
+            spawnPosition.y = parameters.restHeightMm
+        }
+        body.position = spawnPosition
         body.orientation = BodyDynamics.quaternion(fromColumnX: f,
                                                    columnY: dorsal,
                                                    columnZ: right)
         body.velocity = SIMD3(0, 0, 0)
         body.angularVelocity = SIMD3(0, 0, 0)
-        body.grounded = position.y <= parameters.groundY + parameters.standHeightMm
+        // A body at the balance height is IN CONTACT: the leg model holds the
+        // thorax at `standHeightMm`, which is above it. `grounded` is derived
+        // from the height the body was actually placed at, not from the
+        // caller's raw y — deriving it from a buried y would disagree with the
+        // solver that agrees it is penetrating — and not from `normalForce`,
+        // which the solver has not computed yet on the spawn step.
+        body.grounded = spawnPosition.y <= parameters.groundY + parameters.standHeightMm
         // Derived actuator state belongs to the pose it was measured at. A
         // teleport is a spawn, and carrying the stroke of the OLD flight over
         // would make the first frames of a spawned fly report a wing beat that

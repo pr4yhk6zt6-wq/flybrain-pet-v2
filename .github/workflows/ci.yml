@@ -81,6 +81,8 @@ jobs:
         run: python tools/probe_mouth_opens_itself.py
       - name: Rest activity (a still scene must not be a stimulus)
         run: python tools/probe_rest_activity.py
+      - name: Spawn at rest (a spawn must be a pose, not an impact)
+        run: python tools/probe_rest_drive.py
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py

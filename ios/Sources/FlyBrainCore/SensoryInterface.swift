@@ -198,8 +198,16 @@ public struct SensoryInterface {
     }
 
     /// Inject an odor-concentration input (Left/Right antennal sampling).
-    /// Uses antennal-lobe input neurons; RL stronger than LL; concentration
-    /// drives current via a saturating curve (spec #13).
+    /// Uses antennal-lobe input neurons; RL stronger than LL.
+    ///
+    /// The transfer is LINEAR with a standing offset, `min(c, 1) * 40 - 5` nA
+    /// — it is NOT a saturating curve, which is what this docstring used to
+    /// claim. The offset makes the channel non-zero in an odourless world, so
+    /// "no stimulus" is false for it by 5 nA; measured
+    /// (`tools/probe_rest_drive.py`) the offset is behaviourally inert on the
+    /// shipped asset (0 spikes over 600 steps), but it is pinned there so the
+    /// constant cannot drift and the transfer cannot be re-described as
+    /// something it is not (spec #13).
     public func odorInput(concentrationL: Float, concentrationR: Float) -> [SensoryInput] {
         var out: [SensoryInput] = []
         let cL = min(max(concentrationL, 0), 1)

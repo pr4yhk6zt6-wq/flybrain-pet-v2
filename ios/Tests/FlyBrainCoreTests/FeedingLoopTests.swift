@@ -378,6 +378,14 @@ final class FeedingLoopTests: XCTestCase {
     /// firecracker. A network that propagates its input AND stays quiet with no
     /// input is doing something; one that propagates because it is unstable is
     /// not. Measured on the shipped asset: 0 spikes at rest.
+    ///
+    /// This passes for a reason that is worth naming, because it used to pass
+    /// for TWO of them stacked. The `TasteWorld` has no taste, but the tarsal
+    /// channel does not read taste — it reads contact load, and the fly used to
+    /// be spawned 0.78 mm INSIDE the floor, which the contact spring answered
+    /// with a 42-body-weight launch. That transient drove the network for 67
+    /// steps. The spawn is now a force balance (`restHeightMm`), so the fixture
+    /// is a pose and the silence is the network's.
     func testTheConnectomeIsSilentWithNoStimulus() throws {
         let core = try makeCore()
         let world = TasteWorld()
@@ -386,7 +394,17 @@ final class FeedingLoopTests: XCTestCase {
         core.world = world
         core.setPose(position: SIMD3(-40, 0, 0), forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
 
-        for _ in 0..<600 { core.step() }
+        // The spawn itself must be a pose: no launch load, which is the defect
+        // that produced the spike this assertion was reading.
+        var peakLoad: Float = 0
+        for _ in 0..<600 {
+            core.step()
+            peakLoad = max(peakLoad, core.body.groundLoadFraction)
+        }
+        XCTAssertLessThan(peakLoad, 1.5,
+                          "the spawn launched the body \(peakLoad) body weights "
+                          + "into the substrate; the 'spike' below would then be "
+                          + "the fixture, not the network")
 
         XCTAssertEqual(core.engine.spikeCount, 0,
                        "with no sensory drive the network must be silent; "

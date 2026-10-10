@@ -219,6 +219,28 @@ def first_hunger_where(pred, lo=0.0, hi=1.0):
     return None
 
 
+# The REGIME a test picks has to be checked too, not just the model. The Swift
+# fixture for this ordering used energy 0.75 for "mild hunger" — above the
+# model's own hunger threshold (1/1.4 = 0.714), where `hunger_drive` is exactly
+# 0. That made "mildly hungry" byte-identical to "fed" and the assertion
+# compared a state with itself; it only surfaced once the gains became
+# reachable. The gate failed to catch it because it only ever sampled hunger
+# VALUES, never a fixture. Pin the fixture's regime here.
+HUNGER_THRESHOLD = 1.0 / HUNGER_REF
+FIXTURE_MILD = 0.6                 # what FeedingLoopTests now uses
+check(hunger_drive(HUNGER_THRESHOLD + 0.01) == 0,
+      "an energy just above the threshold is NOT hungry — so a fixture there "
+      "cannot order two hunger responses",
+      f"threshold energy {HUNGER_THRESHOLD:.4f}, drive at +0.01 = "
+      f"{hunger_drive(HUNGER_THRESHOLD + 0.01):.3f}")
+check(hunger_drive(FIXTURE_MILD) > 0,
+      "the fixture's 'mild hunger' energy is BELOW the threshold, i.e. hungry",
+      f"energy {FIXTURE_MILD} -> hunger {hunger_drive(FIXTURE_MILD):.3f}")
+check(aversive_gain(FIXTURE_MILD) == APPETITIVE_FLOOR,
+      "and below the blunting onset, so bitterness is untouched there — which "
+      "is what the ordering assertion is about",
+      f"aversive gain {aversive_gain(FIXTURE_MILD):.3f} == floor")
+
 sweet_rises = first_hunger_where(lambda e: appetitive_gain(e) > APPETITIVE_FLOOR + 1e-6)
 bitter_falls = first_hunger_where(lambda e: aversive_gain(e) < APPETITIVE_FLOOR - 1e-6)
 check(sweet_rises is not None and bitter_falls is not None

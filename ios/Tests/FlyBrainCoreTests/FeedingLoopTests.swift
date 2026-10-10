@@ -115,17 +115,33 @@ final class FeedingLoopTests: XCTestCase {
     func testHungryFlyIngestsMatterAndRegainsEnergy() throws {
         let core = try makeCore()
         let world = TasteWorld()
-        world.acceptance = 1
+        // The starvation phase must actually be starvation. `TasteWorld`'s
+        // acceptance is position-independent, so leaving it at 1 while the fly
+        // "starves" put food under its feet for the whole phase: measured, the
+        // fly ate for 357 of the 400 steps and finished at 0.871 — ABOVE the
+        // 0.8 it started from. The fixture was feeding the animal in the one
+        // phase that exists to make it hungry, and the assertion below was
+        // reading the meal it had just served.
+        world.acceptance = 0
         world.reserveLeft = 10
         core.world = world
         core.setPose(position: SIMD3(0.5, 0.8, 0), forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
 
         // Starve first, so "energy went up" cannot be satisfied by the fly
-        // starting full.
+        // starting full. Compared against this core's OWN starting reserve
+        // rather than a hard-coded 0.8: the metabolic rate is a calibrated
+        // constant and a fixture pinned to the default would drift out of
+        // agreement with it silently.
+        let energyStart = core.internalState.energy
         for _ in 0..<400 { core.step() }
         let energyBefore = core.internalState.energy
-        XCTAssertLessThan(energyBefore, 0.8, "the fly should have burned some reserve")
+        XCTAssertLessThan(energyBefore, energyStart,
+                          "the fly should have burned some reserve")
+        XCTAssertEqual(core.ingestedReserveForTesting, 0, accuracy: 1e-6,
+                       "nothing edible was present yet — the fly cannot have eaten "
+                       + "during the phase that makes it hungry")
 
+        world.acceptance = 1                 // now the food is actually there
         forceProboscisOpen(core)
         for _ in 0..<60 {
             core.step()
@@ -178,7 +194,9 @@ final class FeedingLoopTests: XCTestCase {
         }
         XCTAssertEqual(core.ingestedReserveForTesting, 0, accuracy: 1e-6,
                        "bitter food is tasted and rejected, not eaten")
-    }// MARK: - hunger modulation (the citation that changed the design)
+    }
+
+    // MARK: - hunger modulation (the citation that changed the design)
 
     /// Starvation must make sugar MORE appetitive and bitter LESS aversive.
     ///
@@ -215,10 +233,20 @@ final class FeedingLoopTests: XCTestCase {
         var fed = InternalState()
         fed.setEnergyForTesting(1.0)
         var mid = InternalState()
-        mid.setEnergyForTesting(0.75)      // mild hunger
+        // "Mildly hungry" cannot be an arbitrary number. This fixture used
+        // 0.75, which is ABOVE the model's own `hungerEnergyThreshold` (1/1.4
+        // = 0.714): `hungerDrive` is exactly 0 there, so "mild hunger" was
+        // byte-identical to "fed" and the test compared a state with itself.
+        // It failed as soon as the gains became reachable. 0.6 is below the
+        // threshold (hunger exists) and above the hunger level at which bitter
+        // blunting starts (0.4), which is the regime the ordering is about.
+        mid.setEnergyForTesting(0.6)       // mild hunger
         var starved = InternalState()
         starved.setEnergyForTesting(0.0)
 
+        XCTAssertGreaterThan(mid.hungerDrive, 0,
+                             "the 'mild hunger' fixture must actually be hungry; "
+                             + "a state with no hunger cannot order the two responses")
         XCTAssertGreaterThan(mid.gustatoryAppetitiveGain, fed.gustatoryAppetitiveGain,
                              "mild hunger should already sharpen sweet sensitivity")
         XCTAssertEqual(mid.gustatoryAversiveGain, fed.gustatoryAversiveGain, accuracy: 1e-6,

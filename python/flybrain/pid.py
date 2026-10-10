@@ -277,8 +277,8 @@ SYNTHETIC_SOURCE_BASE = 0x5300000000000000
 # `eff = min(1.0, 0.25 + 0.05 * syn)`, i.e. efficacy rises with release-site
 # count and saturates. Release sites are drawn at a level that keeps the
 # network SILENT AT REST but propagative when a channel drives it -- both
-# measured (tools/probe_demo_propagation.py):
-#     rest, no input      : 0 spikes
+# measured (tools/probe_rest_activity.py and tools/probe_mouth_opens_itself.py):
+#     rest, no input      : 0 spikes / 600 steps
 #     taste, 40 nA at 290 : reaches the SEZ motor cells, opens the mouth
 def _release_sites(rng) -> int:
     return rng.randint(*RELEASE_SITES_RANGE)

@@ -99,34 +99,73 @@ final class GustatoryPathwayTests: XCTestCase {
         world.acceptance = 1
         core.world = world
         core.setPose(position: SIMD3(0.5, 0.8, 0), forward: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
-        for _ in 0..<200 { core.step() }
 
-        // No forced joint state: SEZ receives no current except from taste, so
-        // on a fresh core the proboscis stays folded. The tarsal channel must
-        // still sample in exactly that state — it is the only thing that can
-        // start the loop. If this fails, every other test here is decorative:
-        // the fly would have to already be feeding to be able to taste.
+        // The bootstrap claim is about the FIRST step, not about step 200.
+        // This test used to run 200 steps and then assert the proboscis was
+        // still folded — a premise from when the connectome was inert and the
+        // joint could only ever be moved by the test. Now that tarsal taste
+        // actually drives the SEZ, the mouth opens during those 200 steps,
+        // which is the bootstrap WORKING. The thing worth asserting is the
+        // order: the tarsal channel samples and the mouth is still shut at the
+        // start, so nothing but the feet could have opened it.
         XCTAssertFalse(core.proboscisReachedForTesting,
-                       "the proboscis must still be folded on a fresh core "
-                       + "(if it is not, this test is not testing the bootstrap)")
+                       "the proboscis must be folded before the first step, or "
+                       + "this test is not testing the bootstrap")
+        core.step()
         XCTAssertTrue(core.tasteSampledForTesting,
                       "tarsal taste must fire with the proboscis closed — "
                       + "otherwise nothing can ever open it")
+        XCTAssertFalse(core.proboscisReachedForTesting,
+                       "one step of tarsal taste cannot already be a labellar "
+                       + "contact; the feet are the only route that fired")
+
+        // ...and the route does open the mouth, on its own, with no stimulus
+        // other than what the fly is standing on.
+        for _ in 0..<400 { core.step() }
+        XCTAssertTrue(core.proboscisReachedForTesting,
+                      "tarsal taste is the only input here, so it is what must "
+                      + "open the mouth (TASK-005)")
     }
 
     // MARK: - the world's taste field is a contact sense with a sign
 
     func testTasteFieldIsShorterRangeThanOdor() throws {
         let w = World()
-        w.addOdorSource(OdorSource(position: SIMD3(0, 0, 0), kind: .food,
-                                   emissionRate: 1, diffusionConstant: 4))
-        // At 1 mm the plume still carries odor; the labellum cannot reach it.
-        let odor = w.odorConcentration(atX: 1, y: 0, z: 0).left
-        let taste = w.tasteAcceptance(atX: 1, y: 0, z: 0)
-        XCTAssertGreaterThan(odor, 0.1, "the odor field must still carry at 1 mm")
-        XCTAssertEqual(taste, 0, accuracy: 1e-6,
-                       "taste must NOT reach 1 mm — it is a contact sense, not a "
-                       + "second odor channel")
+        let patch = OdorSource(position: SIMD3(0, 0, 0), kind: .food,
+                               emissionRate: 1, diffusionConstant: 4)
+        w.addOdorSource(patch)
+
+        // Where the contact sense ENDS is the patch edge plus the sensillum's
+        // reach, both declared on `OdorSource` — so the test samples around a
+        // boundary it reads rather than a distance it chose.
+        //
+        // This test used to sample at 1 mm and assert taste was 0 there. The
+        // patch now has a radius (1.1 mm) because the feeding bootstrap needs
+        // feet AND mouth on one spot, so 1 mm is INSIDE the patch: the labellum
+        // is standing on food and asserting otherwise asked the sense to fail
+        // exactly where it is supposed to succeed. The claim worth testing is
+        // unchanged — taste is a contact sense, not a second odor channel — but
+        // it has to be tested at the boundary, on both sides of it.
+        let contactEnds = patch.radius + OdorSource.contactReach
+
+        let insideTaste = w.tasteAcceptance(atX: contactEnds - 0.05, y: 0, z: 0)
+        XCTAssertGreaterThan(insideTaste, 0,
+                             "inside the reach the labellum IS touching the patch; "
+                             + "a contact sense that never fires is not a sense")
+
+        let outsideD = contactEnds + 0.15
+        let outsideTaste = w.tasteAcceptance(atX: outsideD, y: 0, z: 0)
+        let outsideOdor = w.odorConcentration(atX: outsideD, y: 0, z: 0).left
+        XCTAssertEqual(outsideTaste, 0, accuracy: 1e-6,
+                       "past its reach the contact sense must report nothing — "
+                       + "it is not a second odor channel")
+        XCTAssertGreaterThan(outsideOdor, 0.1,
+                             "while the plume must still carry at \(outsideD) mm, "
+                             + "or 'shorter range' would be a claim about an "
+                             + "empty world")
+        XCTAssertGreaterThan(outsideOdor, outsideTaste,
+                             "the two senses must be separated by the boundary, "
+                             + "not merely both non-zero")
     }
 
     func testTasteSignComesFromTheSubstance() throws {

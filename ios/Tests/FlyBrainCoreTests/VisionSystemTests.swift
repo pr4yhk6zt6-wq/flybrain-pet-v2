@@ -134,6 +134,60 @@ final class VisionSystemTests: XCTestCase {
                           + "fixed sample range, or the eye reads through it")
     }
 
+    // MARK: - The eye must not invent a stimulus it has not seen
+
+    func testFirstFrameIsSilentAgainstADarkWorld() {
+        // The adaptation baselines used to start at a hardcoded 0.5. A fly
+        // spawned into a dark, motionless world then reported contrast
+        // (0 - 0.5) * 2 = -1.0 from every one of the 1824 ommatidia on its
+        // first frame — a full-strength OFF edge that no part of the scene
+        // caused. Measured on the shipped asset, that phantom flash drove
+        // 1,384 spikes on a scene with no stimulus in it
+        // (`tools/probe_rest_activity.py`); `testTheConnectomeIsSilentWithNo
+        // Stimulus` is what caught it, from the other end.
+        //
+        // The fix seeds the baselines from the first sample, so the first frame
+        // carries no edge. This test asserts the frame, not the spike count:
+        // a silent frame is the cause, and the spike count is downstream.
+        let w = World()
+        w.backgroundLuminance = 0        // a dark scene
+        w.ambientLight = 0
+        let v = VisionSystem()
+        v.luminanceProvider = { x, y, z in w.luminance(atX: x, y: y, z: z) }
+        let first = v.sample(position: (0, 0.8, 0), pose: pose(), dt: 4)
+        XCTAssertTrue(first.filter { $0.pathway == .onEdge || $0.pathway == .offEdge }.isEmpty,
+                      "the seeding frame cannot be an edge: there is no before")
+        // (In this scene the frame is empty altogether — nothing is lit and
+        // nothing moved. That is correct, and the control below is what keeps
+        // "silent" from being indistinguishable from "dead".)
+    }
+
+    func testTheSeedingFrameDoesNotDeafenLaterFrames() {
+        // The control for the test above. "Silent first frame" is trivially
+        // satisfied by never emitting anything, so a world that CHANGES must
+        // still produce edges on the frame after the seed.
+        let w = World()
+        w.backgroundLuminance = 0
+        w.ambientLight = 0
+        let v = VisionSystem()
+        v.luminanceProvider = { x, y, z in w.luminance(atX: x, y: y, z: z) }
+        _ = v.sample(position: (0, 0.8, 0), pose: pose(), dt: 4)   // seed on dark
+        // The scene brightens. `backgroundLuminance` is what every ommatidium
+        // reads at the fixed sample range, so this is a step change the eye can
+        // actually see — a point light 10 mm away would not clear the threshold
+        // at all (illuminance falls as 1/(1+d²)) and the test would pass by
+        // reading nothing.
+        w.backgroundLuminance = 0.4
+        var edges = 0
+        for _ in 0..<20 {
+            edges += v.sample(position: (0, 0.8, 0), pose: pose(), dt: 4)
+                .filter { $0.pathway == .onEdge || $0.pathway == .offEdge }.count
+        }
+        XCTAssertGreaterThan(edges, 0,
+                             "a scene that brightens must read as an edge; the "
+                             + "seeding frame must not have made the eye blind")
+    }
+
     // MARK: - The body actually moves
 
     func testWorldStepIntegratesMovingBody() {

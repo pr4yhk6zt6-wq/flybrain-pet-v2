@@ -133,6 +133,19 @@ public final class VisionSystem: @unchecked Sendable {
     private var adaptedLuminance: [Float] = []
     private var flowAccumulator: [(Float, Float)] = []
 
+    /// Whether the adaptation baselines have been seeded from a real sample.
+    ///
+    /// The baselines start UNSEEDED rather than at an arbitrary 0.5, because a
+    /// fixed midpoint is a claim about the scene that the scene never made. A
+    /// fly spawned into a dark, motionless world compared its first sample
+    /// (luminance 0) against the 0.5 baseline and reported a full-strength OFF
+    /// edge from every ommatidium — a phantom flash that is pure fixture
+    /// artefact. Measured on the shipped asset: 1,384 spikes on a scene with no
+    /// stimulus in it at all (`tools/probe_rest_activity.py`). Seeding from the
+    /// first sample makes the eye's first frame silent, which is what "nothing
+    /// happened yet" means.
+    private var adaptationPrimed = false
+
     /// Luminance field provider — the world implements this (spec #13/#29).
     public var luminanceProvider: ((Float, Float, Float) -> Float)?
 
@@ -218,9 +231,12 @@ public final class VisionSystem: @unchecked Sendable {
                 }
             }
         }
-        prevLuminance = [Float](repeating: 0.5, count: ommatidia.count)
-        adaptedLuminance = [Float](repeating: 0.5, count: ommatidia.count)
+        prevLuminance = [Float](repeating: 0, count: ommatidia.count)
+        adaptedLuminance = [Float](repeating: 0, count: ommatidia.count)
         flowAccumulator = [(Float, Float)](repeating: (0, 0), count: ommatidia.count)
+        // A fresh retina has seen nothing, so it has no baseline to report
+        // contrast against. See `adaptationPrimed`.
+        adaptationPrimed = false
     }
 
     /// Compute the world point a given ommatidium looks at, given the fly's
@@ -267,6 +283,16 @@ public final class VisionSystem: @unchecked Sendable {
             }
 
             // adaptation (background-relative contrast)
+            //
+            // The FIRST sample seeds the baselines instead of being measured
+            // against them: there is no "change" before the eye has seen
+            // anything, and a fixed seed value would be a claim about a scene
+            // the eye has not looked at yet.
+            let first = !adaptationPrimed
+            if first {
+                adaptedLuminance[i] = lum
+                prevLuminance[i] = lum
+            }
             let adapted = adaptedLuminance[i] + (lum - adaptedLuminance[i]) * alpha
             adaptedLuminance[i] = adapted
 
@@ -276,13 +302,17 @@ public final class VisionSystem: @unchecked Sendable {
             let dLumDt = (lum - prev) / Float(max(dt, 0.001))
             prevLuminance[i] = lum
 
-            // ON / OFF pathways (spec #11 — separate dark/light edges)
-            if contrast > 0.05 {
-                events.append(VisualEvent(sourceOmmatidium: i, pathway: .onEdge,
-                                          strength: contrast, side: om.side, time: 0))
-            } else if contrast < -0.05 {
-                events.append(VisualEvent(sourceOmmatidium: i, pathway: .offEdge,
-                                          strength: -contrast, side: om.side, time: 0))
+            // ON / OFF pathways (spec #11 — separate dark/light edges).
+            // Suppressed on the seeding frame: a transient against an
+            // unseeded baseline is not an edge in the world.
+            if !first {
+                if contrast > 0.05 {
+                    events.append(VisualEvent(sourceOmmatidium: i, pathway: .onEdge,
+                                              strength: contrast, side: om.side, time: 0))
+                } else if contrast < -0.05 {
+                    events.append(VisualEvent(sourceOmmatidium: i, pathway: .offEdge,
+                                              strength: -contrast, side: om.side, time: 0))
+                }
             }
             // photoreceptor drive always present (weak)
             if lum > 0.02 {
@@ -295,6 +325,9 @@ public final class VisionSystem: @unchecked Sendable {
                                           strength: dLumDt * 0.5, side: om.side, time: 0))
             }
         }
+
+        // The baselines are seeded now; later frames are measured against them.
+        adaptationPrimed = true
 
         // looming detection: expansion of the covered retinal area over time.
         if let looming = computeLooming(coveredFraction: Float(covered) / Float(max(ommatidia.count, 1)),

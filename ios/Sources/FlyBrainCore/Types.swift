@@ -172,14 +172,11 @@ public enum SynapseSign: Int8, Codable, Sendable {
     public static var modulatory: SynapseSign { .unpolarised }
 }
 
-/// Neuron-level state snapshot for inspection/telemetry (spec #17, #35).
-public struct NeuronState: Sendable {
-    public let neuronID: Int32
-    public let voltage: Float
-    public let firingRate: Float
-    public let recentSpikeCount: Int
-    public var isActive: Bool { recentSpikeCount > 0 }
-}
+// `NeuronState` was declared here as a "neuron-level state snapshot for
+// inspection/telemetry (spec #17, #35)". It was never constructed: the
+// inspection path the app actually uses is `NeuronInspection` in
+// `SimulationCore.swift`, which carries the same fields plus regional/class
+// context. The spec requirement is met; this duplicate was not. Deleted.
 
 /// Behavioral classification — NEVER fed back into the simulation (spec #43/44).
 /// This is a passive observer only.

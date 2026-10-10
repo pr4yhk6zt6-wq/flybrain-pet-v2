@@ -5,14 +5,23 @@ It exists so users and reviewers can tell **what is measured vs inferred** at a
 glance (spec #3, #28, #97, #102, #121). Nothing here is presented as measured
 biology.
 
-## Current dataset (Phase 1–2 status)
+## Current dataset (Phase 3+ status)
 
 - **The bundled `demo_micro.fbpack` is a SYNTHETIC stand-in.** 480 neurons,
   1250 synapses, labeled `SYNTHETIC-DEMO`; every attribute `INFERRED`.
   It exercises the engine/pipeline but represents **no real animal**.
-- Real BANC + FAFB/FlyWire (adult female) ingestion is the next milestone and is
-  gated on dataset access. Until then, all "biology" in the app is a
-  documented approximation.
+- **This is what the app ships.** `AppModel` loads `demo_micro.fbpack`; the fly
+  on screen is driven by the synthetic 480-neuron stand-in, not by a real
+  connectome.
+- **A real BANC CNS connectome HAS been ingested and is in the repo**:
+  `data/generated/banc_cns.fbpack` — 153,746 neurons, 3,036,600 connections
+  (read back from the asset's own header, not from the ingest log),
+  with real neuropil and transmitter labels (provenance BANC, not INFERRED
+  anatomy). It is **not bundled in the app** yet: 66.7 MiB (70.0 MB) against the
+  demo's 56 KB, so shipping it is a deliberate packaging decision, not a missing
+  capability.
+- FAFB/FlyWire remains un-ingested. Until a real connectome is bundled, all
+  "biology" the user sees in the app is a documented approximation.
 
 ## Neural dynamics
 
@@ -49,11 +58,11 @@ biology.
 
 | System | Structural fidelity | Physiological fidelity |
 |---|---|---|
-| Vision (compound-eye approximation) | MEDIUM | APPROXIMATED (feature channels, no real ommatidia) |
+| Vision (ommatidial array) | MEDIUM | APPROXIMATED — a real array of ommatidial axes (Drosophila ~5°) raycast against the world, emitting per-ommatidium luminance, ON/OFF edges, wide-field flicker and looming (expansion). Optic-flow / small-object motion channels are **NOT emitted**; no receptor-level phototransduction |
 | Olfaction (odor fields, antennal lobe, MB) | MEDIUM | APPROXIMATED |
 | Gustation (labellum/legs/proboscis) | LOW | APPROXIMATED — two contact sites (tarsal, labellar) with a physical reach gate; no receptor-level transduction, taste is a scalar acceptance, not a receptor array |
-| Mechanosensation / proprioception | PLANNED | n/a yet |
-| Haltere inertial feedback | LOW | APPROXIMATED — inertial input from integrated body state |
+| Mechanosensation / proprioception | LOW | APPROXIMATED — tarsal contact load reaches the leg neuropil through a dedicated afferent, rectified to a phasic (high-pass) signal with a dead band so standing still produces zero drive |
+| Haltere inertial feedback | LOW | APPROXIMATED — inertial input from integrated body state; no dedicated haltere mechanosensory organ model |
 
 **Reachability note (2026-10-09).** "Wired in the core" and "reachable by the
 animal" are different claims, and this project has been wrong about the second
@@ -70,8 +79,16 @@ that makes the escape channel reachable.
 - Leg/wing/haltere muscle wiring → documented **biomechanical approximation**
   until connectome-derived muscle mapping is available (spec #17).
 - Flight uses reduced-order aerodynamics, not CFD (spec #19).
-- Gait CPGs are neural-pattern-generator approximations, validated against
-  published stepping kinematics.
+- Gait CPGs are neural-pattern-generator approximations. The stepping rhythm
+  and body translation are verified against the offline mirror and asserted in
+  tests, but they are **NOT yet validated against published stepping
+  kinematics** — this line claimed that validation while no such check existed
+  anywhere in the repo.
+- Short-term plasticity (facilitation/depression) is implemented in
+  `Plasticity.swift` and applied to synapses, but the **long-term learning
+  layer has no call sites in the simulation**: `learningEnabled` defaults to
+  `false`, so no reward signal reaches synapses today. Learning behaviors are
+  therefore not claimed.
 
 ## Behavioral claims
 
@@ -84,4 +101,9 @@ that makes the escape channel reachable.
 Any value without a source tag is `UNKNOWN`. We never invent neuron names,
 connections, transmitters, exact weights, behaviors, or regions (spec #60).
 
-Last updated: project scaffold (Phase 1–2). Updated as subsystems land.
+Last updated: Phase 6/7 in progress (`docs/PHYSICS.md`). Updated as subsystems
+land — and the tables above must match the code, not the plan. This file
+previously listed mechanosensation and haltere feedback as `PLANNED` long after
+both had real call sites, and the whole file claimed "Last updated: project
+scaffold (Phase 1–2)" at Phase 9; stale docs are how a missing channel survived
+here before.

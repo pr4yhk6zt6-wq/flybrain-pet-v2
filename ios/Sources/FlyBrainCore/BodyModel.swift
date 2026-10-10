@@ -32,9 +32,15 @@ public struct Wing: Sendable {
     public var side: UInt8
     public var strokeAngle: JointState
     public var rotationAngle: JointState
-    // reduced-order aerodynamics (spec #19): lift/thrust coefficients
-    public var liftCoeff: Float = 1.0
-    public var thrustCoeff: Float = 1.0
+    // Reduced-order aerodynamics (spec #19) live on
+    // `PhysicsParameters.effectiveLiftCoefficient` / `effectiveDragCoefficient`,
+    // which is what `BodyDynamics` actually multiplies into the wing force.
+    //
+    // `liftCoeff`/`thrustCoeff` used to be declared here as stored `Float = 1.0`
+    // fields that nothing read. A knob that looks tunable and is not is worse
+    // than no knob: it is how a reader concludes aerodynamic calibration is
+    // wired to the wing when the real coefficient is elsewhere. Removed rather
+    // than left as a duplicate — set the coefficient on the physics parameters.
 }
 
 public struct Haltere: Sendable {

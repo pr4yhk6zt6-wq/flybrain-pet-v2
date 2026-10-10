@@ -216,12 +216,13 @@ public struct AdExModel: NeuronModel {
 
 // MARK: - Spiking event emission
 
-/// A spike emitted by a neuron (real event — for telemetry, raster, rendering).
-public struct SpikeEvent: Sendable {
-    public let neuron: Int32
-    public let time: Double          // ms
-    public let sourceTransmitter: UInt8
-}
+// `SpikeEvent` was declared here: "A spike emitted by a neuron (real event —
+// for telemetry, raster, rendering)". It was never constructed anywhere, and
+// the paths that DO emit spikes are `SynapticEvent` (into the event queue) and
+// `NeuronInspection` (the tap readout the app actually uses). A type whose
+// comment claims it backs telemetry and rendering, with no producer, is how the
+// optic-flow field and the gustation channel each looked wired before someone
+// checked. Deleted; re-add it WITH the raster view that consumes it.
 
 // MARK: - The engine
 

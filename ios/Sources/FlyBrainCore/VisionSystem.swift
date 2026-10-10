@@ -42,14 +42,11 @@ public struct Ommatidium {
     public var side: UInt8
 }
 
-/// Instantaneous luminance sample at one ommatidium.
-public struct RetinalSample {
-    public let luminance: Float        // 0..1
-    public let contrast: Float         // local contrast (luminance - neighborhood mean)
-    public let dLumDt: Float           // temporal derivative of luminance
-    public let flowU: Float            // optic flow along retinal axes
-    public let flowV: Float
-}
+// `RetinalSample` used to be declared here: luminance, contrast, dLumDt and an
+// optic-flow pair. Nothing ever constructed it — the sampling path keeps
+// `prevLuminance`/`adaptedLuminance` arrays and emits `VisualEvent`s directly,
+// so the struct was a plan, not a fact. It is exactly what makes a reader
+// believe optic flow exists here. Deleted; re-add it WITH its producer.
 
 /// A spike-like visual event translated into synaptic current.
 /// The engine consumes these via `SensoryInterface`.
@@ -85,7 +82,9 @@ public struct EyeConfig: Sendable {
     /// Luminance adaptation time constant (ms).
     public var adaptationTau: Float = 50
     /// LOD: level of detail (0=low power … 3=high detail)
-    public var lod: Int = 1
+    // `lod` (level-of-detail) lived here as an unread Int. This eye raycasts a
+    // fixed ommatidial array; there are no LOD tiers to select. See the header:
+    // small-object and motion pathways are not emitted yet.
 
     public init() {}
 }
@@ -131,7 +130,11 @@ public final class VisionSystem: @unchecked Sendable {
     // per-ommatidium state
     private var prevLuminance: [Float] = []
     private var adaptedLuminance: [Float] = []
-    private var flowAccumulator: [(Float, Float)] = []
+    // There was a `flowAccumulator` here. It was allocated and reset but never
+    // READ by anything, and the motion pathway it was meant to feed is not
+    // emitted (see the header). A dead allocation is not neutral in this repo:
+    // a declared-but-unused field is how the gustation channel looked wired
+    // for months. Deleted rather than re-described; re-add it with its producer.
 
     /// Whether the adaptation baselines have been seeded from a real sample.
     ///
@@ -233,7 +236,6 @@ public final class VisionSystem: @unchecked Sendable {
         }
         prevLuminance = [Float](repeating: 0, count: ommatidia.count)
         adaptedLuminance = [Float](repeating: 0, count: ommatidia.count)
-        flowAccumulator = [(Float, Float)](repeating: (0, 0), count: ommatidia.count)
         // A fresh retina has seen nothing, so it has no baseline to report
         // contrast against. See `adaptationPrimed`.
         adaptationPrimed = false

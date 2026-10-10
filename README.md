@@ -24,7 +24,7 @@ PNGs are committed and CI has no rasteriser.
 ## Status
 - [x] Phase 1: repo scaffold, architecture, data model, provenance system
 - [x] Phase 2 (core): event-driven spiking neural engine (LIF/AdEx), sparse spike propagation, deterministic, unit-tested
-- [x] Phase 3 (sensory + loop): vision (compound-eye sampling, ON/OFF/looming), olfaction, gustation, mechano/haltere transduction; internal state; closed-loop `SimulationCore`; passive behavior classifier
+- [x] Phase 3 (sensory + loop): vision (ommatidial array, ON/OFF/looming; motion + small-object NOT yet emitted), olfaction, gustation (tarsal + labellar contact with a physical reach gate), mechano/haltere transduction; internal state; closed-loop `SimulationCore`; passive behavior classifier
 - [x] Phase 4/5 starters: motor CPG (6-leg gait), articulated body model, 3D `World` (lights/odor/obstacles, collision) wired into the loop
 - [x] CI/CD: GitHub Actions — Python pipeline tests + Swift core build/test on macOS runners; signed .ipa workflow (requires app shell, Phase 9-10)
 - [ ] Phase 6+: flight dynamics, walking validation, connectome visualization (Metal), Life/Connectome/Experiment modes, real BANC/FAFB ingestion

@@ -13,19 +13,45 @@ There is **no** behavior tree, scripted personality, LLM, or RL policy controlli
 the fly (spec #2, #29, #84, #85). Behavior is emergent action selection from
 `world → sensors → sensory neurons → connectome → motor neurons → body → world`.
 
-## Core modules (Phase 1–2, current)
+## Core modules
+
+The list below is generated from the directory, not remembered: every `.swift`
+file under `ios/Sources/FlyBrainCore/` appears, with a one-line role. An earlier
+version of this section was headed "Phase 1–2, current" and named 7 of the 20
+files that exist — omitting `VisionSystem`, `SensoryInterface`, `SimulationCore`,
+`World`, `MotorSystem`, `BodyDynamics` and `InternalState`, i.e. every subsystem
+that later turned out to be mis-described. A module inventory that trails the
+code by seven phases is a documentation bug with a blast radius.
 
 ```
 ios/Sources/FlyBrainCore/
-├── Types.swift         enums, provenance taxonomy, organism info, regions, transmitters
-├── Connectome.swift    compact sparse graph: NeuronRecord / SynapseRecord /
-│                       OutEdgeRange / RegionBounds; .fbpack binary loader/writer
-├── NeuralEngine.swift  event-driven spiking engine (LIF L0 / AdEx L1), deterministic
-│                       min-heap event queue, seeded RNG, real telemetry, snapshots
-├── Detectors.swift     passive spike-window / rate detectors (observers only)
-├── Plasticity.swift    STP + dopamine-gated learning state (separate from structure)
-├── NeuronCell.swift    per-neuron model config (LIF/Izh/Poisson/oscillator)
-└── Network.hpp         (stub) graph interface for motor/body planning (Phase 5+)
+├── Types.swift              enums, provenance taxonomy, organism info, regions, transmitters
+├── Connectome.swift         compact sparse graph: NeuronRecord / SynapseRecord /
+│                            OutEdgeRange / RegionBounds; .fbpack loader/writer;
+│                            region index; neuronIndices(in:)
+├── NeuralEngine.swift       event-driven spiking engine (LIF L0 / AdEx L1),
+│                            deterministic min-heap event queue, seeded RNG,
+│                            O(active) step, rate estimate, snapshots
+├── Detectors.swift          passive spike-window / rate detectors (observers only)
+├── Plasticity.swift         STP + dopamine-gated learning state; `learningEnabled`
+│                            defaults false — no reward signal reaches synapses yet
+├── NeuronCell.swift         per-neuron model config (LIF/Izh/Poisson/oscillator)
+├── NeuronInspection.swift   tap-readout: the per-neuron state surface the app uses
+├── SensoryInterface.swift   sensory channel → connectome neuron selection + injection
+├── VisionSystem.swift       ommatidial array, ON/OFF, flicker, looming;
+│                            motion + small-object NOT yet emitted (see header)
+├── InternalState.swift      hunger/thirst/arousal drives and their decay
+├── MotorSystem.swift        gait CPG, stance/swing, leg & wing actuation
+├── BodyModel.swift          articulated FlyBody: segments, joints, wings, halteres
+├── BodyDynamics.swift       rigid-body integration, contact springs, aerodynamics
+├── World.swift              lights / odors / obstacles / moving objects, raycast
+├── SimulationCore.swift     the closed loop: world → sensors → connectome → body
+├── ConnectomeRenderModel.swift  GPU-ready neuron buffer for the Metal renderer
+├── RenderCamera.swift       orbit camera + projection for the connectome view
+├── RenderPalette.swift      region/class colour mapping
+├── VectorMath.swift         shared SIMD helpers (the basis-math single source)
+└── Network.hpp              (stub) C++-style graph interface, excluded from the
+                             SwiftPM target; not used by any code path yet
 ```
 
 ## Data model

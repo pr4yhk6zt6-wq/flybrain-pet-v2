@@ -83,6 +83,10 @@ jobs:
         run: python tools/probe_rest_activity.py
       - name: Spawn at rest (a spawn must be a pose, not an impact)
         run: python tools/probe_rest_drive.py
+      - name: Doc claims match the code (no stale PLANNED, no dead fields)
+        run: |
+          python tools/verify_doc_claims.py
+          sh tools/mutation_verify_doc_claims.sh
       - name: Body physics offline gates (calibration + regression)
         run: |
           python tools/sim_body_dynamics.py

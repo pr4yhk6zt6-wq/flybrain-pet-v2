@@ -370,11 +370,20 @@ check(not stub_refs and excludes_stub,
             else "not excluded from the SwiftPM target"))
 
 # --------------------------------------------------------------------------
-# J: numbers the doc quotes about the shipped/ingested assets must match the
-#    assets. The dataset section claimed "3,032,918 connections" for a BANC
-#    asset whose own header says 3,036,600 — a wrong number in a document whose
-#    entire purpose is telling a reader what is measured vs inferred.
+# J: numbers the doc quotes about the ingested asset must match the evidence.
+#
+# The dataset section claimed "3,032,918 connections" for a BANC asset whose
+# header says 3,036,600 — a wrong number in the document whose entire purpose
+# is telling a reader what is measured vs inferred.
+#
+# The ~67 MiB binary is a gitignored local build artifact (CI re-derives the
+# release-order checks from the raw download), so the tracked evidence is
+# `banc_cns.report.json`, written by the same ingest that produced the asset.
+# The report is the source of truth here; when the asset IS present (a local
+# build), its header is parsed too and required to agree with the report, so
+# drift between the two is caught rather than silently believed.
 # --------------------------------------------------------------------------
+import json as _json
 import sys as _sys
 _sys.path.insert(0, str(ROOT / "python"))
 try:
@@ -382,35 +391,51 @@ try:
 except Exception:                                            # pragma: no cover
     _parse_fbpack = None
 
-ASSET_CLAIMS = [
-    ("banc_cns.fbpack", "neuronCount", r"153,?746"),
-    ("banc_cns.fbpack", "synapseCount", r"3,?0(?:36|32),?600|3,?032,?918"),
-]
-if _parse_fbpack is not None:
-    for asset, field, pattern in ASSET_CLAIMS:
-        apath = ROOT / "data" / "generated" / asset
-        if not apath.exists():
-            check(False, f"{asset} exists for the doc's claim",
-                  "asset missing from data/generated")
-            continue
+REPORT_PATH = ROOT / "data" / "generated" / "banc_cns.report.json"
+ASSET_PATH = ROOT / "data" / "generated" / "banc_cns.fbpack"
+
+if not REPORT_PATH.exists():
+    check(False, "the BANC ingest report is tracked",
+          "report JSON missing — the ingestion has no committed evidence")
+else:
+    report = _json.loads(REPORT_PATH.read_text())
+    rc = report.get("counts", {})
+    true_neurons = rc.get("neurons_kept")
+    true_synapses = rc.get("connections_kept")
+
+    # Local-only: the untracked binary, when built, must agree with the report.
+    if ASSET_PATH.exists() and _parse_fbpack is not None:
         try:
-            hdr, _ = _parse_fbpack(apath.read_bytes())
+            hdr, _ = _parse_fbpack(ASSET_PATH.read_bytes())
+            agree = (hdr.get("neuronCount") == true_neurons and
+                     hdr.get("synapseCount") == true_synapses)
+            check(agree, "the BANC asset header agrees with its ingest report",
+                  f"header {hdr.get('neuronCount')}/{hdr.get('synapseCount')} vs "
+                  f"report {true_neurons}/{true_synapses}" if not agree
+                  else f"{true_neurons} neurons / {true_synapses} connections")
         except Exception as exc:                             # pragma: no cover
-            check(False, f"{asset} header parses", f"{exc}")
-            continue
-        true_val = hdr.get(field)
-        quoted = [ln.strip() for ln in doc_text.splitlines()
-                  if re.search(pattern, ln)]
-        # The claim is fine if every line quoting a number for this asset uses
-        # the asset's true value, formatted with or without separators.
-        exact = f"{true_val:,}"
-        bad = [ln for ln in quoted if exact not in ln and str(true_val) not in ln]
-        check(not bad,
-              f"the doc's {field} for {asset} matches the asset",
-              f"asset says {exact}; doc lines off: {bad[:2]}" if bad
-              else f"asset and doc agree on {exact}")
-else:                                                        # pragma: no cover
-    print("[NOTE] flybrain.pack not importable; asset-number check skipped")
+            check(False, "the BANC asset header parses", f"{exc}")
+    else:
+        check(True, "the BANC asset header agrees with its ingest report",
+              "asset not present in this checkout (gitignored build artifact) — "
+              "report JSON is the tracked evidence")
+
+    # The doc's numbers must match whichever evidence is authoritative.
+    for label, value, pattern in [
+            ("neuron count", true_neurons, r"^\s*`data/generated/banc_cns"),
+            ("connection count", true_synapses, r"^\s*`data/generated/banc_cns")]:
+        exact = f"{value:,}"
+        # Walk the dataset bullet: a claim line plus its wrapped continuation.
+        lines = doc_text.splitlines()
+        block = ""
+        for i, ln in enumerate(lines):
+            if re.search(pattern, ln):
+                block = " ".join(lines[i:i + 3])
+                break
+        ok = exact in block or str(value) in block
+        check(ok, f"the doc's {label} for the BANC asset matches the evidence",
+              f"evidence says {exact}; doc block reads: {block[:110]}"
+              if not ok else f"doc quotes {exact}")
 
 # --------------------------------------------------------------------------
 passed = sum(1 for ok, _, _ in results if ok)

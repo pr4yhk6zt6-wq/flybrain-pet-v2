@@ -14,8 +14,7 @@ biology.
   on screen is driven by the synthetic 480-neuron stand-in, not by a real
   connectome.
 - **A real BANC CNS connectome HAS been ingested and is in the repo**:
-  `data/generated/banc_cns.fbpack` — 153,746 neurons, 3,036,600 connections
-  (read back from the asset's own header, not from the ingest log),
+  `data/generated/banc_cns.fbpack` — 153,746 neurons, 3,036,600 connections,
   with real neuropil and transmitter labels (provenance BANC, not INFERRED
   anatomy). It is **not bundled in the app** yet: 66.7 MiB (70.0 MB) against the
   demo's 56 KB, so shipping it is a deliberate packaging decision, not a missing

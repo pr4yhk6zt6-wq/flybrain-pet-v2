@@ -438,6 +438,52 @@ else:
               if not ok else f"doc quotes {exact}")
 
 # --------------------------------------------------------------------------
+# K: the INVERSE overclaim — a doc that lists something as OUTSTANDING while
+#    it is already shipped.
+#
+# Every check above catches "claims done, is not". README's Phase 6+ line did
+# the opposite: it listed Metal connectome visualization and BANC ingestion as
+# remaining while the renderer was already on screen (RootView calls
+# ConnectomeRenderView) and the BANC asset was already ingested and reported.
+# That direction is just as misleading, and it survived because a summary line
+# gets read as a summary rather than as a claim to verify.
+#
+# Each item pairs the phrase the doc uses with a predicate proving the artefact
+# is in the tree. If the artefact is present, listing it under "- [ ]" fails.
+# --------------------------------------------------------------------------
+APP = ROOT / "ios" / "Sources" / "FlyBrainPetApp"
+
+PHASE_ITEMS = [
+    ("connectome visualization (Metal)",
+     lambda: (APP / "Render" / "NeuronShaders.metal").exists()
+     and "ConnectomeRenderView" in (APP / "RootView.swift").read_text()),
+    ("real BANC ingestion",
+     lambda: (ROOT / "data" / "generated" / "banc_cns.report.json").exists()),
+]
+if README.exists():
+    rtext = README.read_text()
+    # Only the unchecked boxes count as "listed as outstanding".
+    open_lines = [ln.lower() for ln in rtext.splitlines()
+                  if ln.strip().startswith("- [ ]")]
+    open_blob = "\n".join(open_lines)
+    for label, shipped in PHASE_ITEMS:
+        key = label.split("(")[0].strip().lower()
+        try:
+            is_shipped = shipped()
+        except Exception:                                    # pragma: no cover
+            is_shipped = False
+        listed_open = key in open_blob
+        if listed_open and is_shipped:
+            check(False,
+                  f"README does not list {label} as outstanding while shipped",
+                  "the artefact exists but the item is still under '- [ ]'")
+        else:
+            check(True,
+                  f"README does not list {label} as outstanding while shipped",
+                  "shipped, and not listed as outstanding" if is_shipped
+                  else "not shipped; correctly listed as outstanding")
+
+# --------------------------------------------------------------------------
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, label, detail in results:
     tag = "PASS" if ok else "FAIL"

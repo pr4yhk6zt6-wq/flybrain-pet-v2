@@ -27,9 +27,25 @@ PNGs are committed and CI has no rasteriser.
 - [x] Phase 3 (sensory + loop): vision (ommatidial array, ON/OFF/looming; motion + small-object NOT yet emitted), olfaction, gustation (tarsal + labellar contact with a physical reach gate), mechano/haltere transduction; internal state; closed-loop `SimulationCore`; passive behavior classifier
 - [x] Phase 4/5 starters: motor CPG (6-leg gait), articulated body model, 3D `World` (lights/odor/obstacles, collision) wired into the loop
 - [x] CI/CD: GitHub Actions — Python pipeline tests + Swift core build/test on macOS runners; signed .ipa workflow (requires app shell, Phase 9-10)
-- [ ] Phase 6+: flight dynamics, walking validation, connectome visualization (Metal), Life/Connectome/Experiment modes, real BANC/FAFB ingestion
+- [x] Connectome visualization (Metal): `ConnectomeRenderer` + `NeuronShaders.metal`, wired into Connectome Mode with tap-to-inspect
+- [x] Real connectome ingestion (BANC): 153,746 neurons / 3,036,600 connections in `data/generated/` — **not bundled**; the app still ships the synthetic demo (see the caveat below)
+- [x] Flight aerodynamics: reduced-order wing forces; take-off and landing **emerge from the force balance**, not from a mode flag (asserted in `BodyDynamicsTests`)
+- [ ] Phase 6+ remaining:
+  - **`wingMuscleDrive` reads ZERO on the real BANC release.** The readout
+    consults `WING_NEUROPIL`, which the release assigns **0 motor cells** (52
+    cells, 34 sensory); the flight power muscles (`DLM1-4`) are labelled in
+    `HALTERE_NEUROPIL`. Wings therefore never actuate on BANC — this is the
+    same "channel with no producer" class as the earlier gustation bug, and it
+    is invisible on the demo asset, which *does* place 2 motor cells there.
+  - Flight **control**: no attitude/navigation loop; wings are driven by
+    neuromuscular drive only, with no visual or haltere stabilization term.
+  - Walking validated against **published stepping kinematics** (the gait is
+    asserted against support/tripod invariants only — see
+    `BIOLOGICAL_LIMITATIONS.md`).
+  - Experiment mode (Life and Connectome modes exist).
+  - FAFB/FlyWire ingest.
 
-**Current caveat:** the bundled dataset (`data/generated/demo_micro.fbpack`) is a **small synthetic stand-in** explicitly labeled `SYNTHETIC-DEMO`. It exists so the engine, tests and pipeline are real and verifiable *now*. Real connectome ingestion (BANC + FAFB/FlyWire, adult female) is the next priority — see `docs/CONNECTOME.md` and `python/tools/`.
+**Current caveat:** the bundled dataset (`data/generated/demo_micro.fbpack`) is a **small synthetic stand-in** explicitly labeled `SYNTHETIC-DEMO`. It exists so the engine, tests and pipeline are real and verifiable *now*. A real BANC CNS connectome HAS been ingested and lives in `data/generated/` (153,746 neurons, 3,036,600 connections), but it is **not bundled in the app** — the app loads the demo. FAFB/FlyWire remains un-ingested. See `docs/CONNECTOME.md`, `docs/BIOLOGICAL_LIMITATIONS.md`.
 
 ## Scientific integrity (short version)
 - Every neuron/synapse carries **provenance + confidence** (`MEASURED` … `UNKNOWN`).

@@ -258,6 +258,48 @@ t = t.replace("3,032,918 connections", "3,036,600 connections", 1)
 p.write_text(t)
 EOF
 
+# 12. README lists the SHIPPED Metal renderer as outstanding -> K must fail.
+#     This is the inverse overclaim: the renderer is on screen in RootView, so
+#     a "- [ ]" entry for it is a claim the tree contradicts.
+$P - <<'EOF'
+from pathlib import Path
+p = Path("README.md")
+t = p.read_text()
+t = t.replace("- [x] Connectome visualization (Metal):",
+              "- [ ] connectome visualization (Metal),", 1)
+p.write_text(t)
+EOF
+expect_fail "README lists the shipped Metal renderer as outstanding"
+
+$P - <<'EOF'
+from pathlib import Path
+p = Path("README.md")
+t = p.read_text()
+t = t.replace("- [ ] connectome visualization (Metal),",
+              "- [x] Connectome visualization (Metal):", 1)
+p.write_text(t)
+EOF
+
+# 13. README lists the SHIPPED BANC ingestion as outstanding -> K must fail.
+$P - <<'EOF'
+from pathlib import Path
+p = Path("README.md")
+t = p.read_text()
+t = t.replace("- [x] Real connectome ingestion (BANC):",
+              "- [ ] real BANC ingestion,", 1)
+p.write_text(t)
+EOF
+expect_fail "README lists shipped BANC ingestion as outstanding"
+
+$P - <<'EOF'
+from pathlib import Path
+p = Path("README.md")
+t = p.read_text()
+t = t.replace("- [ ] real BANC ingestion,",
+              "- [x] Real connectome ingestion (BANC):", 1)
+p.write_text(t)
+EOF
+
 expect_pass
 echo
 if [ "$fail" -eq 0 ]; then

@@ -83,6 +83,10 @@ jobs:
         run: python tools/probe_rest_activity.py
       - name: Spawn at rest (a spawn must be a pose, not an impact)
         run: python tools/probe_rest_drive.py
+      - name: Actuator motor pools (a readout channel with no motor cell reads zero)
+        run: |
+          python tools/probe_actuator_motor_pools.py
+          sh tools/mutation_verify_actuator_pools.sh
       - name: Doc claims match the code (no stale PLANNED, no dead fields)
         run: |
           python tools/verify_doc_claims.py

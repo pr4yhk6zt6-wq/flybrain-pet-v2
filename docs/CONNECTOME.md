@@ -74,13 +74,44 @@ The release tags every neuron with the neuropils its synapses fall in, but:
    themselves descending. The file stores per-*connection* neuropil, not
    per-tag counts, so no component can be shown to be "the dominant" one.
 
-So the reduction of a (possibly compound) tag to a single `RegionID` is an
-explicit, documented **INFERRED choice** - first tag that maps, input list
-before output - and is recorded as INFERRED in `.fbpack` provenance and in
-`banc_cns.report.json`. The *tag* is reconstructed; the *region reduction* is
-not. Tags the taxonomy cannot express are counted as mapping gaps in the report
-(`atlas-tag-unmapped`, with the offending tag named) rather than silently
-re-homed or folded into "no region". Measurement tooling:
+**The primary source is the release's own `Top in/out region` column**, not the
+tag reduction. The ingest reads that column per neuron and maps it to one
+`RegionID`; only when the column is empty or `NO_CONS` (4,043 of 158,262
+neurons) does it fall back to reducing the atlas tag lists by hand. Which source
+placed each neuron is counted in `banc_cns.report.json` under `region_source`.
+
+The column is used because it was **measured against an independent ground
+truth** - the release's per-connection neuropil and synapse counts
+(`connections_princeton.csv.gz`), which neither rule can see:
+
+| population                |       n | tag reduction | release column |
+|---------------------------|--------:|--------------:|---------------:|
+| all, strided sample       |  42,774 |         72.5% |          79.1% |
+| motor neurons             |     805 |         61.7% |          97.3% |
+
+The strided row scores each neuron twice (once against its output-side synapse
+mass, once against both sides), so its `n` counts comparisons over a 22,609-
+neuron sample taken every 7th release row - not the first N. That sampling
+matters: an earlier first-4,000 sample put the tag rule *ahead* (73.6% vs
+72.1%), because the leading rows are optic-lobe cells, not a fair draw.
+
+The gap is widest exactly where the simulator is most sensitive. The tag
+reduction scans `input_neuropils` before `output_neuropils`, so a motor neuron
+is filed by where it RECEIVES rather than where it SENDS: it put every flight
+power muscle outside `WING_NEUROPIL`, leaving that region with 0 motor cells
+and `wingMuscleDrive` reading a permanent zero (TASK-007). The column keeps 42
+of the 48 measured wing motor cells there. Measurement tooling:
+`tools/measure_region_source_unbiased.py`,
+`tools/measure_motor_region_ground_truth.py`,
+`tools/measure_region_source_blast_radius.py`.
+
+Both reductions are still an explicit, documented **INFERRED choice** - a
+release annotation (column or tag) is RECONSTRUCTED, the reduction of it to a
+single `RegionID` is not - and both are recorded as INFERRED in `.fbpack`
+provenance and in `banc_cns.report.json`. Tags the taxonomy cannot express are
+counted as mapping gaps in the report, with the offending tag named and the
+neuron kept: the tag vocabulary needs extending, but the neuron itself was
+placed by the column. Measurement tooling:
 `tools/measure_tag_order.py`, `tools/measure_banc_assumptions.py`.
 
 ### Per-transmitter sign

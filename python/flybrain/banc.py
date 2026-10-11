@@ -84,6 +84,17 @@ class BancIngestResult:
     type_vocabulary_size: int = 0
     regions_filled: Counter = field(default_factory=Counter)
     region_unmapped_synapses: Counter = field(default_factory=Counter)
+    # Which source produced each neuron's region: the release's own
+    # `Top in/out region` column, or the atlas-tag reduction used as fallback.
+    region_source_counts: Counter = field(default_factory=Counter)
+    # `Top in/out region` values the simulator has no region for (e.g. the
+    # release's "NO_CONS", 4,300 neurons). Kept SEPARATE from
+    # `region_unmapped_synapses` (which names atlas tags): conflating the two
+    # would hide which vocabulary actually has a hole.
+    region_column_unmapped: Counter = field(default_factory=Counter)
+    # Motor cells per simulator region. Written to the tracked report so CI can
+    # check the motor readout's pools without the (gitignored) BANC binary.
+    motor_by_region: Counter = field(default_factory=Counter)
     transmitter_counts: Counter = field(default_factory=Counter)
     dropped_reasons: Counter = field(default_factory=Counter)
     problems: list[str] = field(default_factory=list)
@@ -236,9 +247,53 @@ def _parse_position(v) -> tuple[float, float, float] | None:
             z * VOXEL_Z_NM / NM_PER_MM)
 
 
+def _region_from_release_column(row: dict, unmapped: Counter) -> int | None:
+    """Region from the release's own `Top in/out region` column.
+
+    neurons.csv.gz carries an explicit per-neuron region column that this
+    ingest used to ignore entirely, reconstructing the region from the atlas
+    tag lists instead (`_dominant_region`).
+
+    That reconstruction was the weaker of the two, measured against the
+    release's own per-connection neuropil + synapse counts
+    (`connections_princeton.csv.gz`), which is ground truth neither rule can
+    see (tools/measure_region_source_unbiased.py,
+    tools/measure_motor_region_ground_truth.py):
+
+        population        n        tag rule   this column
+        all (strided)     21,996     72.5%      79.1%
+        motor neurons        805     61.7%      97.3%
+
+    The gap is widest exactly where the simulator is most sensitive. The tag
+    rule scans `input_neuropils` before `output_neuropils`, so a motor neuron
+    is filed by where it RECEIVES rather than where it SENDS. On the flight
+    power muscles that put every one of the 24 DLM/DVM cells outside the wing
+    neuropil (18 into the generic VNC bucket), leaving WING_NEUROPIL with 0
+    motor cells and `wingMuscleDrive` reading a permanent zero (TASK-007).
+    This column keeps 42 of the 48 measured wing motor cells in WING_NEUROPIL.
+
+    Returns None when the column is absent or names a region the simulator does
+    not have (the release's "NO_CONS", 4,300 neurons), so the caller can fall
+    back to the tag rule and report the gap.
+    """
+    raw = (row.get("Top in/out region") or "").strip()
+    if not raw:
+        return None
+    region = map_neuropil(raw)
+    if region is None:
+        unmapped[raw] += 1
+    return region
+
+
 def _dominant_region(attrs: dict, soma_side: str,
                      unmapped: Counter) -> tuple[int, bool]:
-    """Region of a neuron from its innervated neuropils.
+    """Region of a neuron from its innervated neuropils (FALLBACK PATH).
+
+    Prefer `_region_from_release_column`: this reconstruction scores 61.7% on
+    the release's 805 motor neurons against measured synapse counts, versus
+    97.3% for the release's own `Top in/out region` column. It is kept because
+    that column is missing/`NO_CONS` for 4,300 of 158,262 neurons, and a
+    fallback that is documented is better than dropping them.
 
     HONESTY NOTE (measured on banc-888, see tools/measure_tag_order.py): the
     release's tag lists are NOT ordered by descending synapse count — among
@@ -464,7 +519,44 @@ def build_banc_asset(data_dir: Path,
         side = 1 if side_raw == "left" else 2 if side_raw == "right" else 0
 
         is_frag = "fragment" in (row.get("Primary Cell Type") or "").lower()
-        region, unmapped = _dominant_region(a, side_raw, result.region_unmapped_synapses)
+        # Region: the release's own explicit column first, the atlas-tag
+        # reduction only as a fallback. See `_region_from_release_column` for
+        # the measured reason (61.7% vs 97.3% on motor neurons, and the
+        # TASK-007 zero-wing-drive defect this removes).
+        region = _region_from_release_column(row, result.region_column_unmapped)
+        if region is None:
+            # The column is absent or says NO_CONS: reconstruct from the tags.
+            region, tag_missing = _dominant_region(
+                a, side_raw, result.region_unmapped_synapses)
+            result.region_source_counts["atlas-tag-fallback"] += 1
+        else:
+            # A region from the release's own column wins outright. Still run
+            # the tag reduction for its SIDE EFFECT: it counts the release tags
+            # the mapping does not cover, which is the only pointer a
+            # maintainer gets for extending `neuropil.py`. The returned region
+            # is deliberately discarded — the column is the better source
+            # (97.3% vs 61.7% on the release's motor neurons), so substituting
+            # the tag reduction here would reintroduce TASK-007.
+            _, tag_missing = _dominant_region(
+                a, side_raw, result.region_unmapped_synapses)
+            result.region_source_counts["release-region-column"] += 1
+        # A neuron the column placed, whose atlas tag the mapping cannot
+        # express. It is KEPT (the release gave it a region, so dropping it
+        # would discard a real neuron), but the hole in the mapping vocabulary
+        # is still a hole and is named here — the same discipline as the
+        # `atlas-tag-unmapped` drop path below, minus the drop. Scoped to
+        # neurons that HAVE a tag: `_dominant_region` sets its flag for "no
+        # tags at all" too, and that is not a mapping gap.
+        has_any_tag = bool(a.get("input_neuropils") or a.get("output_neuropils"))
+        if tag_missing and has_any_tag and region != int(RegionID.UNKNOWN):
+            missing_tag = next(
+                (t for key in ("input_neuropils", "output_neuropils")
+                 for t in (a.get(key) or [])
+                 if map_neuropil(t, side_raw) is None), "?")
+            result.problems.append(
+                f"neuron {rid}: atlas tag {missing_tag!r} has no simulator "
+                f"region — placed by the release's `Top in/out region` column "
+                f"instead, so the mapping needs that tag")
         if region == int(RegionID.UNKNOWN) and not keep_unmapped_neurons:
             result.neurons_dropped += 1
             # Distinguish the two very different reasons a neuron has no
@@ -544,6 +636,13 @@ def build_banc_asset(data_dir: Path,
         pre_nt_types.append(nt_tag)
         result.neurons_kept += 1
         result.regions_filled[RegionID(region).name] += 1
+        # Motor cells per region, recorded in the TRACKED report so the
+        # actuator probe's pinned table rests on evidence CI can see: the BANC
+        # asset itself is gitignored (68 MB build artifact), so a region that
+        # ends up with 0 motor cells is invisible to CI unless the count is
+        # written here. `readMotorDrive` reads exactly three of these regions.
+        if int(pack.neuron_flags(super_class)) & 1:
+            result.motor_by_region[RegionID(region).name] += 1
         if pos != (0.0, 0.0, 0.0):
             b = region_bounds_acc.get(region)
             if b is None:
@@ -552,7 +651,6 @@ def build_banc_asset(data_dir: Path,
             else:
                 b[0] = min(b[0], pos[0]); b[1] = min(b[1], pos[1]); b[2] = min(b[2], pos[2])
                 b[3] = max(b[3], pos[0]); b[4] = max(b[4], pos[1]); b[5] = max(b[5], pos[2])
-        _ = unmapped
 
     # The CSV table is no longer needed; free it before the synapse block so the
     # transient peak stays inside the device memory cap.
@@ -720,6 +818,9 @@ def write_ingest_report(result: BancIngestResult, path: Path,
             "connections_below_threshold": result.dropped_below_threshold,
         },
         "regions_filled": dict(result.regions_filled.most_common()),
+        "region_source": dict(result.region_source_counts.most_common()),
+        "motor_by_region": dict(result.motor_by_region.most_common()),
+        "region_column_unmapped": dict(result.region_column_unmapped.most_common(20)),
         "unmapped_neuropils": dict(result.region_unmapped_synapses.most_common(50)),
         "transmitters": dict(result.transmitter_counts.most_common()),
         "problems": result.problems,
@@ -733,10 +834,19 @@ def write_ingest_report(result: BancIngestResult, path: Path,
             # the first-listed tag equals the measured argmax in 60.2%, so no
             # component is demonstrably "the dominant" one. INFERRED, not
             # reconstructed.
+            # The release's own `Top in/out region` column is the PRIMARY source.
+            # It is a release annotation (measured, like the atlas tag) and it
+            # agrees with the release's per-synapse neuropil labels far better
+            # than our tag reduction does - on the 805 motor neurons, 97.3% vs
+            # 61.7%, scored over connections_princeton.csv.gz
+            # (tools/measure_motor_region_ground_truth.py). Reducing that ONE
+            # region per neuron is still our choice, so the field stays
+            # INFERRED; what changed is which release annotation we trust.
             "neuropil_assignment": (
-                "INFERRED (atlas tag -> single simulator region; compound tags "
-                "resolved to the leading mapped component) — the release tag is "
-                "RECONSTRUCTED, the region reduction is not"),
+                "INFERRED (release `Top in/out region` -> single simulator "
+                "region; falls back to the leading mapped atlas tag for the "
+                "4,300 neurons the column leaves as NO_CONS) - the release "
+                "annotation is RECONSTRUCTED, the region reduction is not"),
             "soma_position": "RECONSTRUCTED (voxel coordinates, 4/4/40 nm)",
             "transmitter": "PREDICTED (classifier in the release)",
             # Per-transmitter, because the transmitters do NOT share a valence

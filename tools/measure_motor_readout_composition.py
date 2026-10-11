@@ -64,12 +64,22 @@ def main() -> int:
     motor_elsewhere = collections.Counter()
     total = 0
 
+    column_unmapped: collections.Counter = collections.Counter()
     for rid, row in table.items():
         total += 1
         sc = (row.get("Super Class") or "(unlabelled)").strip() or "(unlabelled)"
-        region, _ = banc._dominant_region(attrs.get(rid, {}),
-                                          (row.get("Soma side") or "").strip().lower(),
-                                          unmapped)
+        # Same region SOURCE as the ingest: the release's own column first, the
+        # atlas-tag reduction only where that column is absent/NO_CONS. Using
+        # `_dominant_region` alone here would describe a mapping the asset no
+        # longer uses, which is exactly the silent drift this gate exists to
+        # catch (see `_region_from_release_column` for the measured gap:
+        # 61.7% vs 97.3% on motor neurons).
+        region = banc._region_from_release_column(row, column_unmapped)
+        if region is None:
+            region, _ = banc._dominant_region(
+                attrs.get(rid, {}),
+                (row.get("Soma side") or "").strip().lower(),
+                unmapped)
         if sc == "motor" and region not in READOUT_REGIONS:
             motor_elsewhere[RegionID(region).name if region in
                             {int(r) for r in RegionID} else str(region)] += 1

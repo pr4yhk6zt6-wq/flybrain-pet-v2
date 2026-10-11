@@ -31,12 +31,6 @@ PNGs are committed and CI has no rasteriser.
 - [x] Real connectome ingestion (BANC): 153,746 neurons / 3,036,600 connections in `data/generated/` — **not bundled**; the app still ships the synthetic demo (see the caveat below)
 - [x] Flight aerodynamics: reduced-order wing forces; take-off and landing **emerge from the force balance**, not from a mode flag (asserted in `BodyDynamicsTests`)
 - [ ] Phase 6+ remaining:
-  - **`wingMuscleDrive` reads ZERO on the real BANC release.** The readout
-    consults `WING_NEUROPIL`, which the release assigns **0 motor cells** (52
-    cells, 34 sensory); the flight power muscles (`DLM1-4`) are labelled in
-    `HALTERE_NEUROPIL`. Wings therefore never actuate on BANC — this is the
-    same "channel with no producer" class as the earlier gustation bug, and it
-    is invisible on the demo asset, which *does* place 2 motor cells there.
   - Flight **control**: no attitude/navigation loop; wings are driven by
     neuromuscular drive only, with no visual or haltere stabilization term.
   - Walking validated against **published stepping kinematics** (the gait is

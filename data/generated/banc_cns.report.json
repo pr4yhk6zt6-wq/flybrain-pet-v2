@@ -11,21 +11,37 @@
     "connections_below_threshold": 0
   },
   "regions_filled": {
-    "MEDULLA": 48518,
-    "LOBULA": 23806,
-    "SUPERIOR_BRAIN": 20533,
-    "LOBULA_PLATE": 17803,
-    "LEG_NEUROMERE": 9954,
-    "VENTRAL_NERVE_CORD": 6521,
-    "ABDOMINAL_NEUROMERE": 5757,
-    "ANTENNAL_LOBE": 5559,
-    "SUBESOPHAGEAL_ZONE": 4775,
-    "LATERAL_HORN": 3059,
-    "MUSHROOM_BODY": 2819,
-    "OPTIC_LOBE": 2354,
-    "CENTRAL_COMPLEX": 1313,
-    "HALTERE_NEUROPIL": 923,
-    "WING_NEUROPIL": 52
+    "MEDULLA": 70028,
+    "SUPERIOR_BRAIN": 19256,
+    "LOBULA": 16456,
+    "LEG_NEUROMERE": 14991,
+    "SUBESOPHAGEAL_ZONE": 5171,
+    "LOBULA_PLATE": 4564,
+    "MUSHROOM_BODY": 4302,
+    "ANTENNAL_LOBE": 4217,
+    "VENTRAL_NERVE_CORD": 3269,
+    "ABDOMINAL_NEUROMERE": 3062,
+    "CENTRAL_COMPLEX": 2563,
+    "LATERAL_HORN": 2359,
+    "HALTERE_NEUROPIL": 1766,
+    "WING_NEUROPIL": 939,
+    "OPTIC_LOBE": 803
+  },
+  "region_source": {
+    "release-region-column": 153746,
+    "atlas-tag-fallback": 4043
+  },
+  "motor_by_region": {
+    "LEG_NEUROMERE": 394,
+    "ABDOMINAL_NEUROMERE": 187,
+    "SUBESOPHAGEAL_ZONE": 101,
+    "WING_NEUROPIL": 50,
+    "VENTRAL_NERVE_CORD": 35,
+    "HALTERE_NEUROPIL": 33,
+    "SUPERIOR_BRAIN": 5
+  },
+  "region_column_unmapped": {
+    "NO_CONS": 4043
   },
   "unmapped_neuropils": {},
   "transmitters": {
@@ -42,7 +58,7 @@
   "problems": [],
   "provenance": {
     "topology": "RECONSTRUCTED (EM tracing, BANC)",
-    "neuropil_assignment": "INFERRED (atlas tag -> single simulator region; compound tags resolved to the leading mapped component) \u2014 the release tag is RECONSTRUCTED, the region reduction is not",
+    "neuropil_assignment": "INFERRED (release `Top in/out region` -> single simulator region; falls back to the leading mapped atlas tag for the 4,300 neurons the column leaves as NO_CONS) - the release annotation is RECONSTRUCTED, the region reduction is not",
     "soma_position": "RECONSTRUCTED (voxel coordinates, 4/4/40 nm)",
     "transmitter": "PREDICTED (classifier in the release)",
     "sign": {
@@ -59,9 +75,9 @@
   },
   "extra": {
     "asset": "data/generated/banc_cns.fbpack",
-    "asset_bytes": 68728020,
+    "asset_bytes": 69958028,
     "min_synapses": 1,
-    "elapsed_seconds": 1819.83,
+    "elapsed_seconds": 1088.31,
     "type_vocabulary_size": 11566,
     "dropped_reasons": {
       "fragment-no-region": 375,

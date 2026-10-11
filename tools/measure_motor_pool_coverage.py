@@ -106,6 +106,8 @@ def from_release() -> int:
     types_by_region: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     side_by_region: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     unmapped: collections.Counter = collections.Counter()
+    column_unmapped: collections.Counter = collections.Counter()
+    source_used: collections.Counter = collections.Counter()
     total_motor = 0
 
     for rid, row in table.items():
@@ -114,7 +116,19 @@ def from_release() -> int:
         total_motor += 1
         a = attrs.get(rid, {})
         side_raw = (row.get("Soma side") or a.get("side") or "").strip().lower()
-        region, _ = banc._dominant_region(a, side_raw, unmapped)
+        # The SAME region source as the ingest: the release's own
+        # `Top in/out region` column first, the atlas-tag reduction only where
+        # that column is absent/NO_CONS. Using `_dominant_region` alone here
+        # would report a mapping the asset no longer uses — which is exactly
+        # the drift that made this tool print "READS ZERO on the real release"
+        # for WING_NEUROPIL after TASK-007 was fixed (61.7% -> 97.3% on motor
+        # neurons; see banc.py::_region_from_release_column).
+        region = banc._region_from_release_column(row, column_unmapped)
+        if region is None:
+            region, _ = banc._dominant_region(a, side_raw, unmapped)
+            source_used["atlas-tag-fallback"] += 1
+        else:
+            source_used["release-region-column"] += 1
         name = RegionID(region).name if region in {int(r) for r in RegionID} else str(region)
         by_region[name] += 1
         side_by_region[name][1 if side_raw == "left" else 2 if side_raw == "right" else 0] += 1
@@ -122,6 +136,10 @@ def from_release() -> int:
         types_by_region[name][primary] += 1
 
     print(f"\nRELEASE — Super Class 'motor' neurons: {total_motor:,}\n")
+    print(f"  region source: {dict(source_used.most_common())}")
+    if column_unmapped:
+        print(f"  `Top in/out region` values with no simulator region: "
+              f"{dict(column_unmapped.most_common(5))}")
     print(f"  {'region':<26} {'motor':>6}  sides")
     for name, k in by_region.most_common():
         print(f"  {name:<26} {k:>6,}  {dict(sorted(side_by_region[name].items()))}")

@@ -219,7 +219,7 @@ public final class Connectome: @unchecked Sendable {
     /// classes", not "did a classed cell happen to fire". It used to infer the
     /// latter from `firingActiveNeurons`, so on the real BANC asset a frame
     /// where only unlabelled cells fired flipped the readout to region-only and
-    /// it summed 4,770 sensory afferents in `legNeuromere` as motor command —
+    /// it summed 5,260 sensory afferents in `legNeuromere` as motor command —
     /// an intermittent short circuit that appears and disappears with the
     /// activity, and the more likely the quieter the fly is.
     public var hasCellClasses: Bool {

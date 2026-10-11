@@ -47,6 +47,10 @@ jobs:
         run: python tools/probe_shipped_asset_channels.py
       - name: Motor pool coverage (the six leg slots must be addressable)
         run: python tools/measure_motor_pool_coverage.py
+      - name: Motor pools from the tracked report (no pool may be empty)
+        run: |
+          python tools/verify_motor_pools_from_report.py
+          sh tools/mutation_verify_motor_pools.sh
       - name: Time-scale gate (drive signal must be readable per step)
         run: python tools/measure_time_scale.py
       - name: Render packing gate (packed word widths vs the real enums)

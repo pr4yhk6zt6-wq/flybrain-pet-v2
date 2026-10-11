@@ -145,19 +145,22 @@ ASSETS = [Path(p) for p in sys.argv[1:]] or [
 #   * banc_cns is a gitignored local build artifact, so CI simply never sees
 #     it. Rather than let its finding sit in a probe that CI cannot run, the
 #     expected result is pinned here: when the asset IS present (a dev machine)
-#     the reading must match. "0 motor cells in wingNeuropil" is a known defect
-#     documented in README's Phase 6+ list; if the region mapping is fixed, or
-#     the release changes, this table fails and forces the doc to be updated
-#     with it. BANC is EXEMPT from the exit code only because it is read-ahead
-#     evidence, never a CI input.
+#     the reading must match, so a change to the region mapping fails loudly
+#     instead of quietly emptying a pool. BANC is EXEMPT from the exit code
+#     because it is read-ahead evidence, never a CI input — the CI-runnable
+#     half of this same check is tools/verify_motor_pools_from_report.py, which
+#     reads the TRACKED ingest report instead of the binary.
 # --------------------------------------------------------------------------
 EXPECT = {
     "demo_micro.fbpack":  {"legNeuromere": 2, "wingNeuropil": 2,
                            "subesophagealZone": 2},
-    # A known defect, pinned rather than hidden: the release labels the flight
-    # power muscles (DLM1-4) in HALTERE_NEUROPIL, which the readout never reads.
-    "banc_cns.fbpack":    {"legNeuromere": 187, "wingNeuropil": 0,
-                           "subesophagealZone": 102},
+    # The zero-wing-pool defect (TASK-007) is FIXED and these are the measured
+    # values after it: the ingest now takes each neuron's region from the
+    # release's own `Top in/out region` column, which keeps the flight power
+    # muscles inside WING_NEUROPIL instead of filing them by their INPUT side.
+    # Before the fix this row was {legNeuromere 187, wingNeuropil 0, SEZ 102}.
+    "banc_cns.fbpack":    {"legNeuromere": 394, "wingNeuropil": 50,
+                           "subesophagealZone": 101},
 }
 BANC_EXEMPT = {"banc_cns.fbpack"}  # untracked in CI; pinned, not enforced
 

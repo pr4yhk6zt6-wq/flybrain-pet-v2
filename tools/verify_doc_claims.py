@@ -484,6 +484,52 @@ if README.exists():
                   else "not shipped; correctly listed as outstanding")
 
 # --------------------------------------------------------------------------
+# L: the region-source claim. CONNECTOME.md states the release's own
+#    `Top in/out region` column is the PRIMARY region source and the atlas-tag
+#    reduction is only a fallback. That ordering is the whole of the TASK-007
+#    fix, and a revert (swapping the two branches) would leave the doc
+#    confidently wrong while every other check still passed — the doc would be
+#    describing a pipeline the ingest no longer runs. So read the ingest's own
+#    call order and require it to match the sentence.
+# --------------------------------------------------------------------------
+BANC_PY = ROOT / "python" / "flybrain" / "banc.py"
+CONNECTOME_DOC = ROOT / "docs" / "CONNECTOME.md"
+if BANC_PY.exists() and CONNECTOME_DOC.exists():
+    btext = BANC_PY.read_text()
+    ctext = CONNECTOME_DOC.read_text()
+    # The ordering is not just "which call appears first in the file" — a
+    # mutation can leave the column call in place but unreachable (guard
+    # rewritten to `if True:`, so the tag reduction always runs). What makes
+    # the column primary is the exact two-line sequence: assign from the
+    # column, THEN fall back only `if region is None`. Require that sequence,
+    # and require it to precede the tag call.
+    SEQ = ("region = _region_from_release_column(row, result.region_column_unmapped)\n"
+           "        if region is None:")
+    col_call = btext.find(SEQ)
+    tag_call = btext.find("_dominant_region(\n                a, side_raw")
+    code_says_column_first = 0 <= col_call < tag_call
+    # The fallback branch must actually call the tag reduction (a mutation that
+    # empties the branch would leave `region` unbound — the UnboundLocalError
+    # this gate itself once shipped).
+    code_has_tag_fallback = (
+        tag_call != -1 and col_call != -1
+        and "atlas-tag-fallback" in btext[tag_call:tag_call + 400])
+    doc_says_column_first = (
+        "**The primary source is the release's own `Top in/out region` column**"
+        in ctext)
+    code_ok = code_says_column_first and code_has_tag_fallback
+    check(code_ok == doc_says_column_first,
+          "the doc's region-source claim matches the ingest's call order",
+          f"code column-first={code_says_column_first}, "
+          f"tag fallback present={code_has_tag_fallback}, "
+          f"doc column-first={doc_says_column_first}"
+          if code_ok != doc_says_column_first
+          else "both say the release column is primary")
+    # The column must be a documented INFERRED reduction, like the tag rule.
+    check("INFERRED" in ctext and "Top in/out region" in ctext,
+          "the region source is documented as an INFERRED reduction")
+
+# --------------------------------------------------------------------------
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, label, detail in results:
     tag = "PASS" if ok else "FAIL"

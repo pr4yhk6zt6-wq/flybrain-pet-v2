@@ -300,6 +300,38 @@ t = t.replace("- [ ] real BANC ingestion,",
 p.write_text(t)
 EOF
 
+# 14. The region-source ORDER is reverted (tag reduction first, release column
+#     only as a backup) while CONNECTOME.md still says the column is primary.
+#     That is the TASK-007 fix undone: the doc would describe a pipeline the
+#     ingest no longer runs. Check L must fail.
+$P - <<'EOF'
+import re
+from pathlib import Path
+b = Path("python/flybrain/banc.py")
+orig = b.read_text()
+Path("/tmp/banc_py_backup.py").write_text(orig)
+# Swap the two calls and their guards: the tag reduction now runs first.
+swapped = orig.replace(
+    "        region = _region_from_release_column(row, result.region_column_unmapped)"
+    "\n        if region is None:",
+    "        region = None\n        if True:", 1)
+swapped = swapped.replace(
+    "            region, tag_missing = _dominant_region(\n"
+    "                a, side_raw, result.region_unmapped_synapses)\n"
+    "            result.region_source_counts[\"atlas-tag-fallback\"] += 1",
+    "            region, tag_missing = _dominant_region(\n"
+    "                a, side_raw, result.region_unmapped_synapses)\n"
+    "            result.region_source_counts[\"atlas-tag-fallback\"] += 1",
+    1)
+assert swapped != orig, "swap produced no change"
+b.write_text(swapped)
+EOF
+expect_fail "the ingest reverts to the tag rule while the doc claims the column"
+$P - <<'EOF'
+from pathlib import Path
+Path("python/flybrain/banc.py").write_text(Path("/tmp/banc_py_backup.py").read_text())
+EOF
+
 expect_pass
 echo
 if [ "$fail" -eq 0 ]; then

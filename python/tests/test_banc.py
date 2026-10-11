@@ -211,15 +211,21 @@ def test_glia_and_fragments_are_dropped_not_hidden(fixture):
     assert result.problems == []
 
 
-def test_atlas_tag_unmapped_is_reported_not_renamed(tmp_path):
-    # A tag with no simulator region must be dropped AS A MAPPING GAP: counted
-    # under its own reason and named in `problems`. Folding it into the generic
-    # "fragment/no region" bucket is how a real mapping hole stayed invisible.
+def test_atlas_tag_unmapped_is_reported_not_silently_rehomed(tmp_path):
+    # A tag with no simulator region must never be folded away in silence. It
+    # used to be DROPPED under `atlas-tag-unmapped`; since the region now comes
+    # from the release's own `Top in/out region` column (TASK-007), such a
+    # neuron has a region and is KEPT — but the hole in the tag vocabulary is
+    # still a hole, so it must be counted and named in `problems`. Asserting
+    # "dropped" here would pin a pipeline the ingest no longer runs.
     _rows, result, _out, _size = _fixture(
         tmp_path, unmapped_tag="TOTALLY_UNKNOWN_PILOT_REGION")
-    assert result.dropped_reasons["atlas-tag-unmapped"] == 1
+    assert result.region_unmapped_synapses["TOTALLY_UNKNOWN_PILOT_REGION"] == 1
     assert any("TOTALLY_UNKNOWN_PILOT_REGION" in p for p in result.problems), \
         result.problems
+    # The column places it ("ME"), so it is kept rather than dropped.
+    assert result.dropped_reasons["atlas-tag-unmapped"] == 0
+    assert result.neurons_kept == 9
 
 
 def test_duplicate_pairs_merge_with_counts_summed(fixture):

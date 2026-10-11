@@ -321,7 +321,7 @@ def main() -> int:
             print(f"  {rel}: {name} is motor-only, so the channel that reads it has")
             print(f"      no afferent and injects nothing. The channel is inert, NOT")
             print(f"      shorted. A real release labels its afferents (measured:")
-            print(f"      banc_cns.fbpack legNeuromere = 4,770 sensory / 187 motor), so")
+            print(f"      banc_cns.fbpack legNeuromere = 5,260 sensory / 394 motor), so")
             print(f"      this is the synthetic asset's grain, not the simulator's rule.")
         print()
 

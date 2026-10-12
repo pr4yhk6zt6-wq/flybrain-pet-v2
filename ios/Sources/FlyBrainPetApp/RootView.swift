@@ -210,6 +210,22 @@ struct TelemetryStrip: View {
                  : "motor drive: region only (asset has no cell class)")
                 .font(.caption2.monospaced())
                 .foregroundStyle(core.motorClassified ? Color.secondary : Color.orange)
+            // The internal drives, so a user can see that hunger and thirst are
+            // state the loop actually moves rather than decoration. Thirst was
+            // computed for nobody until TASK-006; showing it is how a viewer can
+            // tell the difference between "the fly is standing on water" and
+            // "the fly is drinking".
+            Text(String(format: "energy %.2f  hydration %.2f  hunger %.2f  thirst %.2f",
+                        core.internalState.energy, core.internalState.hydration,
+                        core.internalState.hungerDrive, core.internalState.thirstDrive))
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+            if core.drunkWaterForTesting > 0 {
+                Text(String(format: "drank %.3f from %@", core.drunkWaterForTesting,
+                            core.waterSourceForTesting))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.blue)
+            }
         }
         .padding(8)
         .background(.ultraThinMaterial)

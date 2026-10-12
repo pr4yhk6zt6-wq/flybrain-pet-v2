@@ -27,6 +27,34 @@ public protocol WorldProvider: AnyObject {
     /// reach the substrate, so it falls off far more sharply than the volatile
     /// odor field the antennae sample from a distance.
     func tasteAcceptance(atX: Float, y: Float, z: Float) -> Float
+    /// WATER contact at a point (0..1), a SEPARATE sense from taste acceptance.
+    ///
+    /// Water is not a phagostimulant and must not be folded into
+    /// `tasteAcceptance`: a fly that cannot tell sugar from water is not
+    /// tasting. It is nonetheless a real gustatory modality with its own
+    /// receptor — PPK28, an osmosensitive DEG/ENaC channel (Cameron, Hiroi,
+    /// Ngai & Scott, *Nature* 2010, PMID 20364123; confirmed by Chen, Wang &
+    /// Wang, *J Neurosci* 2010, PMID 20445050) — and its own sensory neurons,
+    /// which sit on the LABELLUM, the TARSI and the wing margins and project to
+    /// the subesophageal zone (Inoshita & Tanimura, *PNAS* 2006, PMID 16415164).
+    /// That distribution is why a tarsal sample exists here: the fly tastes
+    /// water with its FEET, which is what lets a closed proboscis sense water
+    /// and extend. Gating water on the mouth would make the channel circular
+    /// and permanently silent (the TASK-001/TASK-006 trap).
+    ///
+    /// Return 0 where there is no water in contact reach.
+    func waterContact(atX: Float, y: Float, z: Float) -> Float
+    /// Remove up to `amount` of drinkable water in contact reach of the point,
+    /// and return what was actually taken (0 if there is none).
+    ///
+    /// The hydration gain must come from water that left the substrate, for the
+    /// same reason ingestion does (see `ingest`): otherwise "drinking" is a
+    /// boolean and the loop has no quantity in it. Water is a STANDING source
+    /// (a puddle does not measurably shrink at the scale of one fly — recorded
+    /// in `OdorSource.reserve`'s note), so a conformer may return `amount`
+    /// without decrementing anything. What it must NOT do is return a constant:
+    /// the fly's hydration has to track how long it stayed on the water.
+    func drinkWater(atX: Float, y: Float, z: Float, amount: Float) -> Float
     /// Remove up to `amount` of edible matter in contact reach of the point, and
     /// return what was actually taken (0 if nothing edible is there).
     ///
@@ -48,6 +76,18 @@ extension WorldProvider {
     /// vision/odor return 0, and `isConsumable` says so, so a feeding test
     /// written against one fails loudly instead of passing vacuously.
     public func ingest(atX: Float, y: Float, z: Float, amount: Float) -> Float {
+        _ = (atX, y, z, amount)
+        return 0
+    }
+    /// A world with no water in contact reach. Defaulted, so a fixture written
+    /// before the thirst loop existed keeps compiling and reports "no water"
+    /// rather than silently drinking.
+    public func waterContact(atX: Float, y: Float, z: Float) -> Float {
+        _ = (atX, y, z)
+        return 0
+    }
+    /// See `waterContact`. Defaulted to 0 for the same reason.
+    public func drinkWater(atX: Float, y: Float, z: Float, amount: Float) -> Float {
         _ = (atX, y, z, amount)
         return 0
     }
@@ -178,6 +218,32 @@ public final class SimulationCore: @unchecked Sendable {
     public static let ingestionRatePerMs: Float = 0.002
     /// Energy gained per reserve unit swallowed.
     public static let energyPerReserveUnit: Float = 1.0
+
+    /// Hydration gained per unit of water drawn (TASK-006).
+    ///
+    /// 1.0 for the same reason `energyPerReserveUnit` is: hydration is already
+    /// the 0..1 reserve this loop is trying to move, so a second scale factor
+    /// would only be a place for the two to disagree. The QUANTITY is what
+    /// distinguishes drinking from a state flip, and that lives in the amount
+    /// `drinkWater` returns.
+    public static let hydrationPerWaterUnit: Float = 1.0
+
+    /// Whether a water sample reached the brain in the last step, and how
+    /// strong it was after thirst modulation.
+    ///
+    /// Exposed the same way the taste telemetry is: the claim under test is
+    /// "thirst has a consumer", and a consumer that never receives a non-zero
+    /// sample is not a consumer. A gate that only read `hydration` could pass
+    /// while the sense itself never fired.
+    public private(set) var waterSampledForTesting = false
+    public private(set) var lastWaterContactForTesting: Float = 0
+    /// Hydration actually taken up, in hydration units (not the requested
+    /// amount), so a bounded drink is distinguishable from a free one.
+    public private(set) var drunkWaterForTesting: Float = 0
+    /// Which surface the last drink came from ("labellum" or "tarsus"). The
+    /// tarsal route is the one that makes the loop non-circular, so it must be
+    /// observable rather than inferred.
+    public private(set) var waterSourceForTesting: String = ""
 
     public init(connectome: Connectome,
                 parameters: SimulationParameters = SimulationParameters()) {
@@ -314,6 +380,44 @@ public final class SimulationCore: @unchecked Sendable {
                     ingestedReserveForTesting += taken
                 }
             }
+
+            // DRINKING (TASK-006). The thirst half of the loop. `drink()` had no
+            // caller, so `hydration` could only ever fall and `thirstDrive` was
+            // computed for nobody — a signal with no consumer, the same shape as
+            // the gustatory defect.
+            //
+            // Sampled at the TARSI first, exactly as taste is, and for a
+            // receptor-level reason rather than symmetry: water receptor neurons
+            // sit on the tarsi as well as the labellum (Inoshita & Tanimura,
+            // *PNAS* 2006, PMID 16415164), so a fly standing in a puddle senses
+            // it with its feet. Gating this on an open proboscis would make the
+            // channel circular — "you must already be drinking to sense the
+            // water that makes you drink" — which is the trap TASK-005's mirror
+            // was written to catch.
+            //
+            // The intake is a RATE over the step times the contact, so hydration
+            // tracks how long the fly stayed on the water and how much water the
+            // patch presented; `InternalState.drink` bounds the uptake by the
+            // animal's actual deficit, so a hydrated fly does not bank more.
+            let tarsalWater = internalState.thirstModulatedWater(waterAtTarsus(w))
+            if tarsalWater > 0 {
+                sensoryInputs += sensory.waterInput(contact: tarsalWater)
+                waterSampledForTesting = true
+                lastWaterContactForTesting = tarsalWater
+            }
+            let labellarWater = internalState.thirstModulatedWater(waterAtProboscisTip(w))
+            if labellarWater > 0 {
+                sensoryInputs += sensory.waterInput(contact: labellarWater)
+                waterSampledForTesting = true
+                lastWaterContactForTesting = labellarWater
+            }
+            if let (taken, source) = drinkWaterFromReachableSource(w, dt: dt) {
+                let gained = internalState.drink(amount: taken * Self.hydrationPerWaterUnit)
+                if gained > 0 {
+                    drunkWaterForTesting += gained
+                    waterSourceForTesting = source
+                }
+            }
         }
         // internal-state modulation → sensory gain (spec #24)
         // Arousal raises ALL sensory input (octopamine-like). Hunger does NOT
@@ -416,6 +520,16 @@ public final class SimulationCore: @unchecked Sendable {
         body.proboscis.angle = angle
     }
 
+    /// Place the animal at a specific hydration level (TASK-006 tests).
+    ///
+    /// Same reasoning as `setEnergyForTesting`: `hydration` is `private(set)`,
+    /// so a test cannot write it, and the only production writer is `advance()`
+    /// (drains) and `drink()` (fills). Tests need the animal to START thirsty to
+    /// check that thirst has a consumer, so this is the one sanctioned door.
+    public func setHydrationForTesting(_ value: Float) {
+        internalState.setHydrationForTesting(value)
+    }
+
     /// Taste acceptance at the tarsus (feet on substrate).
     ///
     /// Flies carry gustatory sensilla on the tarsi and taste what they stand
@@ -446,6 +560,59 @@ public final class SimulationCore: @unchecked Sendable {
         proboscisReachedForTesting = true
         let tip = proboscisTipPosition
         return w.tasteAcceptance(atX: tip.x, y: tip.y, z: tip.z)
+    }
+
+    // MARK: - water sampling (TASK-006)
+
+    /// Water contact at the tarsal contact point, gated on real stance.
+    ///
+    /// The tarsal route is not a convenience: water receptor neurons are present
+    /// on the tarsi (Inoshita & Tanimura, *PNAS* 2006, PMID 16415164), and this
+    /// is the ONLY water sense available to a fly whose proboscis is folded. If
+    /// water were sampled only at the labellum, the channel that has to open the
+    /// mouth would itself require the mouth to be open — the circular wiring
+    /// that made the original gustatory channel permanently silent (TASK-001).
+    private func waterAtTarsus(_ w: WorldProvider) -> Float {
+        guard dynamics.isGrounded else { return 0 }
+        return w.waterContact(atX: position.x,
+                              y: dynamics.parameters.groundY,
+                              z: position.z)
+    }
+
+    /// Water contact at the proboscis tip, gated by real contact — the same
+    /// predicate taste uses. A retracted proboscis cannot drink.
+    private func waterAtProboscisTip(_ w: WorldProvider) -> Float {
+        guard FlyBody.proboscisReaches(body.proboscis.angle) else { return 0 }
+        let tip = proboscisTipPosition
+        return w.waterContact(atX: tip.x, y: tip.y, z: tip.z)
+    }
+
+    /// Draw water from whichever reachable point is on it, and report what left
+    /// the world.
+    ///
+    /// The mouth is preferred when it is out (a fly drinking pumps with its
+    /// labellum), and the tarsi are the fallback — which is what lets the first
+    /// contact happen at all. Returns nil when no water is in reach, so the
+    /// caller does not have to distinguish "took nothing" from "nothing there".
+    ///
+    /// The rate constant is the SAME `ingestionRatePerMs` the meal uses: this
+    /// model has no independent measurement of water pumping throughput and
+    /// inventing a second number would dress up a guess as calibration. Using
+    /// one rate for both is an APPROXIMATION, stated as one.
+    private func drinkWaterFromReachableSource(_ w: WorldProvider,
+                                               dt: Double) -> (Float, String)? {
+        let rate = Float(dt) * Self.ingestionRatePerMs
+        if FlyBody.proboscisReaches(body.proboscis.angle) {
+            let tip = proboscisTipPosition
+            let got = w.drinkWater(atX: tip.x, y: tip.y, z: tip.z, amount: rate)
+            if got > 0 { return (got, "labellum") }
+        }
+        if dynamics.isGrounded {
+            let got = w.drinkWater(atX: position.x, y: dynamics.parameters.groundY,
+                                   z: position.z, amount: rate)
+            if got > 0 { return (got, "tarsus") }
+        }
+        return nil
     }
 
     /// Read per-group motor drive from current VNC/SEZ activity (real spikes).

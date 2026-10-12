@@ -19,10 +19,24 @@ Objects (implemented, and what is still missing):
   and nothing reads one; inventing the field would repeat the unread-variable
   bug this project keeps finding. Substrate mechanosensation that *is* modelled
   arrives via the tarsal load channel.
-- WATER → odor + contact + hydration
-  ⚠️ Water does not deplete (`OdorSource.isNutritive` is false for `.water`, so
-  it is neither swallowed nor drunk-from). `hydration` currently only falls;
-  the thirst half of the loop is NOT closed.
+- WATER → odor + **contact water sense** + **hydration** ✅
+  Water has its own receptor in reality — PPK28, an osmosensitive DEG/ENaC
+  channel (Cameron et al., *Nature* 2010, PMID 20364123; Chen et al.,
+  *J Neurosci* 2010, PMID 20445050) — and its own sensory neurons, on the
+  **labellum, the tarsi and the wing margins**, projecting to the subesophageal
+  zone (Inoshita & Tanimura, *PNAS* 2006, PMID 16415164). The model samples
+  contact at the **tarsi and the labellum**; the tarsal route is what lets a fly
+  with a folded proboscis sense water and start drinking, so the loop is not
+  circular. Hydration rises by the amount that leaves the world (a rate over
+  time on the water, bounded by the animal's deficit).
+  ⚠️ **Water is NOT a phagostimulant.** `tasteAcceptance` returns 0 for it and a
+  separate `waterContact` query reports it, because a fly that cannot tell sugar
+  from water is not tasting. The real receptor reports **hypo-osmolarity**, not
+  "water" — this model has no osmolarity field and does not claim to reproduce
+  the receptor's stimulus.
+  ⚠️ Water and sugar pathways are **not independent**: silencing sugar GRNs
+  reduces the proboscis-extension response to water (Shiu et al., *Nature* 2024,
+  PMID 39358519, Fig. 4f). The channels are separate *here*; no more is claimed.
 - FRUIT / FERMENTED MATERIAL → strong odor + nutrition
 - LEAVES / BRANCHES → visual + tactile surfaces
 - WALLS / OBSTACLES → visual + tactile

@@ -79,6 +79,12 @@ jobs:
         run: python tools/measure_metabolism_balance.py
       - name: Feeding loop mirror (hunger has a consumer; a meal is matter)
         run: python tools/mirror_feeding_loop.py
+      - name: Thirst loop mirror (thirst has a consumer; water is a sense)
+        run: python tools/mirror_thirst_loop.py
+      - name: Water pathway (the sense must be driven and non-circular)
+        run: |
+          python tools/probe_water_pathway.py
+          sh tools/mutation_verify_water_pathway.sh
       - name: App stimulus reachability (the shipped app must be able to fire each channel)
         run: python tools/probe_app_stimulus_reachability.py
       - name: Mouth opens itself (the shipped asset must not be an inert connectome)

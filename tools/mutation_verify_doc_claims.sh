@@ -332,6 +332,25 @@ from pathlib import Path
 Path("python/flybrain/banc.py").write_text(Path("/tmp/banc_py_backup.py").read_text())
 EOF
 
+# 15. WORLD.md is put back to claiming the water loop is OPEN, while the drink
+#     consumer exists in the code. This is the inverse overclaim for TASK-006:
+#     a warning that outlived the defect it describes. Check M must fail.
+$P - <<'EOF'
+from pathlib import Path
+p = Path("docs/WORLD.md")
+orig = p.read_text()
+Path("/tmp/world_md_backup.md").write_text(orig)
+t = orig.replace("- WATER → odor + **contact water sense** + **hydration** ✅",
+                 "- WATER → odor only (no contact/hydration term yet)", 1)
+assert t != orig, "mutation 15 produced no change"
+p.write_text(t)
+EOF
+expect_fail "WORLD.md claims the water loop is open while the consumer exists"
+$P - <<'EOF'
+from pathlib import Path
+Path("docs/WORLD.md").write_text(Path("/tmp/world_md_backup.md").read_text())
+EOF
+
 expect_pass
 echo
 if [ "$fail" -eq 0 ]; then

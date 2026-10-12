@@ -61,8 +61,8 @@ print("App stimulus reachability — can the shipped app exercise each channel?"
 
 # ---- 1. every sensory channel must have a call site in the CORE ----------
 # (This is the gustation defect: the resolver worked, nobody called it.)
-CHANNELS = ["odorInput", "loomingInput", "gustatoryInput", "haltereInput",
-            "wingStrainInput", "touchAfferent", "touchInput"]
+CHANNELS = ["odorInput", "loomingInput", "gustatoryInput", "waterInput",
+            "haltereInput", "wingStrainInput", "touchAfferent", "touchInput"]
 for ch in CHANNELS:
     n = len(re.findall(r"sensory\.%s\(" % ch, core_text))
     check(n > 0, f"{ch} is called by the simulation core ({n} call site(s))")# ---- 2. the APP must be able to produce the stimulus ---------------------

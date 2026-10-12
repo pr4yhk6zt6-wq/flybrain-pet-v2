@@ -530,6 +530,32 @@ if BANC_PY.exists() and CONNECTOME_DOC.exists():
           "the region source is documented as an INFERRED reduction")
 
 # --------------------------------------------------------------------------
+# M: the INVERSE overclaim for the water loop. WORLD.md used to carry a warning
+#    that water was "odor only" and that "the thirst half of the loop is NOT
+#    closed" — correct when written, and exactly the kind of note that outlives
+#    the defect it describes. TASK-005's lesson was that a stale warning reads as
+#    a current claim, so the check is now two-directional: if the consumer
+#    exists, the doc must not still say it does not.
+# --------------------------------------------------------------------------
+WORLD_DOC = ROOT / "docs" / "WORLD.md"
+CORE_SWIFT = ROOT / "ios" / "Sources" / "FlyBrainCore" / "SimulationCore.swift"
+if WORLD_DOC.exists() and CORE_SWIFT.exists():
+    wdoc = WORLD_DOC.read_text()
+    water_wired = "internalState.drink(amount:" in CORE_SWIFT.read_text()
+    stale = ("thirst half of the loop is NOT closed" in wdoc
+             or "WATER → odor only" in wdoc)
+    check(water_wired and not stale,
+          "WORLD.md does not describe the water loop as unclosed while it is closed",
+          "the drink consumer exists but the doc still says the loop is open"
+          if (water_wired and stale) else
+          ("the loop is closed and documented as closed" if water_wired
+           else "no consumer found — the doc correctly says the loop is open"))
+    # The water sense must be documented as SEPARATE from taste, because that
+    # separation is the whole reason the two needs are distinguishable.
+    check("NOT a phagostimulant" in wdoc or "no phagostimulant" in wdoc.lower(),
+          "WORLD.md states water carries no phagostimulant valence")
+
+# --------------------------------------------------------------------------
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, label, detail in results:
     tag = "PASS" if ok else "FAIL"

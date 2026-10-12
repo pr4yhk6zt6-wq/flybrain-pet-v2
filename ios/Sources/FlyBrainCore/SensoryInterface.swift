@@ -38,6 +38,17 @@ public enum SensoryModality: Int, Sendable {
     case proprioception = 4
     case haltere = 5
     case nociception = 6
+    /// Water contact (TASK-006).
+    ///
+    /// Biologically this IS a gustatory submodality — PPK28 sits in gustatory
+    /// receptor neurons (Cameron et al., *Nature* 2010, PMID 20364123) — and it
+    /// shares the SEZ projection with sugar and bitter (Inoshita & Tanimura,
+    /// *PNAS* 2006, PMID 16415164). It is a SEPARATE case here so the channel
+    /// can be told apart in telemetry and in the gates: the whole point of
+    /// TASK-006 was that "water" existed in the source and in no signal, and a
+    /// channel that is indistinguishable from feeding cannot be checked for
+    /// that. Nothing downstream branches on this value today.
+    case water = 7
 
     public var name: String {
         switch self {
@@ -48,6 +59,7 @@ public enum SensoryModality: Int, Sendable {
         case .proprioception: return "proprioception"
         case .haltere: return "haltere"
         case .nociception: return "nociception"
+        case .water: return "water"
         }
     }
 }
@@ -297,6 +309,29 @@ public struct SensoryInterface {
         if let n = inputAfferent(region: .subesophagealZone) {
             out.append(SensoryInput(neuron: n, current: a * 40,
                                     modality: .gustation, strength: abs(a)))
+        }
+        return out
+    }
+
+    /// Water contact → the SEZ, on its own channel (TASK-006).
+    ///
+    /// Water receptor neurons project to the subesophageal zone, the same
+    /// first-order target as the other gustatory modalities but a distinct
+    /// region of it (Inoshita & Tanimura, *PNAS* 2006, PMID 16415164). So this
+    /// resolves the same way `gustatoryInput` does, and the two differ in the
+    /// SIGNAL rather than in where they land: water carries 0 phagostimulant
+    /// valence (see `OdorSource.tasteAcceptance`) and its own modality tag.
+    ///
+    /// Current is positive only. There is no aversive-water case in this model
+    /// and none is claimed: the real receptor reports hypo-osmolarity, which
+    /// this model has no field for.
+    public func waterInput(contact: Float) -> [SensoryInput] {
+        var out: [SensoryInput] = []
+        let c = min(max(contact, 0), 1)
+        guard c > 0 else { return out }
+        if let n = inputAfferent(region: .subesophagealZone) {
+            out.append(SensoryInput(neuron: n, current: c * 40,
+                                    modality: .water, strength: c))
         }
         return out
     }

@@ -12,8 +12,9 @@
 //
 //  Partial / not yet an entity in its own right (the header used to list these
 //  as if they existed; only the odor half is real today):
-//    FOOD → odor only (no taste/texture/energy term yet)
-//    WATER → odor only (no contact/hydration term yet)
+//    FOOD → odor + contact taste + finite reserve → energy   [closed]
+//    WATER → odor + contact water sense + hydration          [closed]
+//    TEXTURE → not modelled at all (see OdorSource.tasteAcceptance)
 //
 //  Implements WorldProvider so SimulationCore can sample luminance/odor/
 //  temperature from real world state.
@@ -179,6 +180,34 @@ public struct OdorSource: Sendable {
         let d = distanceToPatch(from: p)
         let falloff = max(1 - d / Self.contactReach, 0)
         return valence * emissionRate * reserve * falloff * falloff
+    }
+
+    /// WATER contact at `p` (0..1): a separate modality from taste acceptance,
+    /// measured by a separate receptor.
+    ///
+    /// The receptor is PPK28, an osmosensitive DEG/ENaC channel, and its loss
+    /// abolishes water sensitivity (Cameron et al., *Nature* 2010, PMID
+    /// 20364123; Chen et al., *J Neurosci* 2010, PMID 20445050). The neurons sit
+    /// on the labellum, the TARSI and the wing margins (Inoshita & Tanimura,
+    /// *PNAS* 2006, PMID 16415164) — the tarsal population is what lets a fly
+    /// with a closed proboscis sense water and extend it, so this sense is
+    /// sampled at the FEET as well as the mouth.
+    ///
+    /// Distance uses the same contact reach as taste, because it is the same
+    /// kind of sensor (a contact chemosensory hair, not an odour plume), and
+    /// `emissionRate` stands in for how much water surface the patch presents.
+    /// A pheromone or a bitter source is not water; only `.water` answers here.
+    ///
+    /// HONESTY about what is NOT claimed: the REAL sensor reports
+    /// hypo-osmolarity, not "water" — a dilute sugar solution is also
+    /// hypo-osmolar. This model has no osmolarity field, so it reports water
+    /// where a water source is, and nothing where there is none. It does not
+    /// claim to reproduce the receptor's actual stimulus.
+    public func waterContact(at p: SIMD3<Float>) -> Float {
+        guard kind == .water else { return 0 }
+        let d = distanceToPatch(from: p)
+        let falloff = max(1 - d / Self.contactReach, 0)
+        return min(emissionRate * falloff * falloff, 1)
     }
 }
 
@@ -353,6 +382,58 @@ public final class World: WorldProvider, @unchecked Sendable {
         return total
     }
 
+    // MARK: - Drinking (TASK-006: the thirst half of the loop)
+
+    /// Water contact at `p` (0..1), or 0 where nothing drinkable is in reach.
+    ///
+    /// Same contact reach as taste, because it is the same kind of sensor.
+    public func waterContact(at p: SIMD3<Float>) -> Float {
+        var best: Float = 0
+        for s in odorSources {
+            let c = s.waterContact(at: p)
+            if c > best { best = c }
+        }
+        return best
+    }
+
+    /// Draw up to `amount` of water from the nearest source in contact reach and
+    /// return what was actually taken.
+    ///
+    /// A puddle does not shrink measurably at the scale of one fly, so the
+    /// source's `reserve` is NOT decremented — that is why water is excluded
+    /// from `isNutritive` and why `ingest` will not accept it. But the amount
+    /// returned still tracks how much the fly asked for, so hydration rises with
+    /// TIME SPENT ON THE WATER and the loop keeps a quantity rather than a flag.
+    ///
+    /// The fly's hydration DEFICIT bounds what it can take: a fly that is fully
+    /// hydrated does not keep gaining from standing in a puddle. That bound
+    /// lives in `SimulationCore` (which owns `InternalState`); this method's job
+    /// is only to say how much water was available at the point.
+    @discardableResult
+    public func drinkWater(at p: SIMD3<Float>, amount: Float) -> Float {
+        guard amount > 0 else { return 0 }
+        var best = -1
+        var bestDist = Float.greatestFiniteMagnitude
+        for (i, s) in odorSources.enumerated() where s.kind == .water {
+            let d = s.distanceToPatch(from: p)
+            guard d <= OdorSource.contactReach else { continue }
+            if d < bestDist { bestDist = d; best = i }
+        }
+        guard best >= 0 else { return 0 }
+        // Standing water is not consumed to exhaustion; the return value is the
+        // REQUESTED amount, capped by how much water is presented at this point.
+        let contact = odorSources[best].waterContact(at: p)
+        return min(amount, amount * contact)
+    }
+
+    public func waterContact(atX x: Float, y: Float, z: Float) -> Float {
+        waterContact(at: SIMD3(x, y, z))
+    }
+
+    public func drinkWater(atX x: Float, y: Float, z: Float, amount: Float) -> Float {
+        drinkWater(at: SIMD3(x, y, z), amount: amount)
+    }
+
     public func removeAllOdorSources() { odorSources.removeAll() }
 
     /// Toggle the light set (player interaction — environment only, spec #42).
@@ -475,12 +556,14 @@ public final class World: WorldProvider, @unchecked Sendable {
     /// must not read as a food taste, because an animal that cannot tell sugar
     /// from water is not tasting.
     ///
-    /// HONESTY: the original sentence here said water "drives drinking through
-    /// the hydration term". That consumer does not exist. `InternalState.drink()`
-    /// has no caller anywhere in the app or the pipeline (grep-verified), and
-    /// `OdorSource.Kind.water` is an ODOR source. Water is currently odor-only;
-    /// nothing hydrates. Recorded because a comment describing behaviour that
-    /// was never wired is how a gap survives review.
+    /// HONESTY (this note used to say the opposite, and was RIGHT when it did): it
+    /// once read "water drives drinking through the hydration term. That
+    /// consumer does not exist." It did not — `InternalState.drink()` had no
+    /// caller for the whole life of the project (TASK-006). The consumer now
+    /// exists: `SimulationCore` samples `waterContact` at the tarsi and the
+    /// labellum and calls `drinkWater` → `InternalState.drink()`. Water is still
+    /// NOT a phagostimulant and still returns 0 here; what changed is that the
+    /// water sense has its own channel rather than a promise in a comment.
     ///
     /// The field is SHORTER-RANGE than odor by construction (contact sense),
     /// and it does not propagate as a cloud — see `OdorSource.tasteAcceptance`.

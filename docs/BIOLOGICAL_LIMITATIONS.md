@@ -59,7 +59,7 @@ biology.
 |---|---|---|
 | Vision (ommatidial array) | MEDIUM | APPROXIMATED — a real array of ommatidial axes (Drosophila ~5°) raycast against the world, emitting per-ommatidium luminance, ON/OFF edges, wide-field flicker and looming (expansion). Optic-flow / small-object motion channels are **NOT emitted**; no receptor-level phototransduction |
 | Olfaction (odor fields, antennal lobe, MB) | MEDIUM | APPROXIMATED |
-| Gustation (labellum/legs/proboscis) | LOW | APPROXIMATED — two contact sites (tarsal, labellar) with a physical reach gate; no receptor-level transduction, taste is a scalar acceptance, not a receptor array |
+| Gustation (labellum/legs/proboscis) | LOW | APPROXIMATED — two contact sites (tarsal, labellar) with a physical reach gate; no receptor-level transduction, taste is a scalar acceptance, not a receptor array. **Water is a separate channel** from phagostimulant taste: `waterContact` reports it, `tasteAcceptance` returns 0 for it, and the thirst gain is applied to the sample. The real water receptor (PPK28) reports hypo-osmolarity, which this model has no field for |
 | Mechanosensation / proprioception | LOW | APPROXIMATED — tarsal contact load reaches the leg neuropil through a dedicated afferent, rectified to a phasic (high-pass) signal with a dead band so standing still produces zero drive |
 | Haltere inertial feedback | LOW | APPROXIMATED — inertial input from integrated body state; no dedicated haltere mechanosensory organ model |
 

@@ -11,13 +11,22 @@
 #   3. drop a routing case so the readout consults fewer regions
 #
 # The clean tree must pass, otherwise the mutations prove nothing.
+#
+# Files are restored from a TEMP BACKUP, NOT `git checkout`: `SimulationCore.swift`
+# is a tracked file that may legitimately carry uncommitted edits (TASK-006's
+# water loop lived there while this script deleted it), and `git checkout`
+# silently discards them. This script did exactly that once; the backup makes
+# it safe to run before the work is committed.
 
 cd "$(dirname "$0")/.." || exit 1
 P=python3
 SRC=ios/Sources/FlyBrainCore/SimulationCore.swift
+BAK=$(mktemp -d) || exit 1
+cp "$SRC" "$BAK/SimulationCore.swift" || exit 1
+trap 'cp "$BAK/SimulationCore.swift" "$SRC"; rm -rf "$BAK"' EXIT
 
 fails=0
-reset_src() { git checkout -- "$SRC"; }
+reset_src() { cp "$BAK/SimulationCore.swift" "$SRC"; }
 expect_pass() {
     if ! $P tools/probe_actuator_motor_pools.py >/dev/null 2>&1; then
         echo "[MISSED] clean tree did not pass — mutations prove nothing"

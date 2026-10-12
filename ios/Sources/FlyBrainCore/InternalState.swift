@@ -183,6 +183,39 @@ public struct InternalState: Sendable {
         return Self.gustatoryGainFloor * (1 - excess * Self.aversiveBluntingSpan)
     }
 
+    // MARK: - Thirst (TASK-006)
+
+    /// Gain applied to a WATER contact sample, given how thirsty the animal is.
+    ///
+    /// Same shape as the hunger modulation of taste and for the same reason:
+    /// thirst does not run a different behaviour, it changes how strongly the
+    /// SAME water drives the water channel. The receptor itself is not known to
+    /// be modulated — the modulation in the literature is downstream, in the
+    /// brain: the four interoceptive SEZ neurons (ISNs) that read internal
+    /// water/nutrient state and oppositely regulate sugar and water intake
+    /// (Jourjine, Mullaney, Mann & Scott, *Cell* 2016, PMID 27477513;
+    /// González Segarra et al., *eLife* 2023, PMID 37732734). Applying it here
+    /// is an APPROXIMATION of that central modulation, and is labelled as one:
+    /// the direction (thirstier → stronger water drive) is the measured claim,
+    /// the gain span is an engineering choice reported by
+    /// `tools/mirror_thirst_loop.py`.
+    ///
+    /// Never reaches zero for the same reason the gustatory gain floor exists:
+    /// a hydrated fly can still sense water, it just responds less.
+    public static let thirstGainFloor: Float = 1.0
+    public static let thirstGainSpan: Float = 2.0
+
+    public var thirstModulatedGain: Float {
+        Self.thirstGainFloor + thirstDrive * Self.thirstGainSpan
+    }
+
+    /// Apply thirst's gain to a water-contact sample (0..1), keeping it in 0..1
+    /// so the channel's current stays inside the range the engine expects.
+    public func thirstModulatedWater(_ contact: Float) -> Float {
+        guard contact > 0 else { return 0 }
+        return min(contact * thirstModulatedGain, 1)
+    }
+
     // MARK: - Physiology effects (call from body/physics)
 
     public mutating func consumeEnergy(_ delta: Float) { energy = max(0, energy - delta) }
@@ -197,9 +230,41 @@ public struct InternalState: Sendable {
         satiety = min(1, satiety + amount * 0.5)
         feedingState = amount > 0 ? .feeding : feedingState
     }
-    public mutating func drink(amount: Float) {
-        hydration = min(1, hydration + amount)
+    /// Water the fly has actually taken up, in hydration units (TASK-006).
+    ///
+    /// Reported for the same reason `ingestedReserveForTesting` is: "did it
+    /// drink" and "did hydration rise" are different claims, and a loop that
+    /// flips a flag would satisfy the second. This is the quantity that left the
+    /// world.
+    public private(set) var drunkWaterTotal: Float = 0
+
+    /// Drink `amount` of water (hydration units).
+    ///
+    /// BOUNDED BY THE DEFICIT: a fully hydrated fly cannot bank hydration it
+    /// does not need, so the uptake is capped at `1 - hydration` scaled by a
+    /// reserve factor. Without the cap, standing on a puddle would fill
+    /// hydration past any thirst signal and the drive would be pinned at zero
+    /// forever — the mirror image of the bug this task is fixing. The cap is
+    /// 1.2x the deficit rather than exactly the deficit so a single drink can
+    /// overshoot slightly (real intake is not servo-controlled to the
+    /// millilitre) while still being bounded.
+    ///
+    /// Returns the amount actually taken up, so a caller can report it rather
+    /// than assume the request succeeded.
+    @discardableResult
+    public mutating func drink(amount: Float) -> Float {
+        guard amount > 0 else { return 0 }
+        let deficit = max(0, 1 - hydration)
+        let taken = min(amount, deficit * Self.drinkDeficitMultiplier)
+        hydration = min(1, hydration + taken)
+        drunkWaterTotal += taken
+        return taken
     }
+
+    /// How far past its current deficit a single drink may take an animal.
+    /// See `drink(amount:)`.
+    public static let drinkDeficitMultiplier: Float = 1.2
+
     public mutating func applyStress(_ delta: Float) {
         stress = min(1, stress + delta)
         arousal = min(1, arousal + delta * 0.3)
@@ -214,6 +279,11 @@ public struct InternalState: Sendable {
     /// for part of the simulation.
     public mutating func setEnergyForTesting(_ value: Float) {
         energy = min(1, max(0, value))
+    }
+    /// Place hydration at a specific level (TASK-006 test hook). See
+    /// `setEnergyForTesting` for why a hook exists at all.
+    public mutating func setHydrationForTesting(_ value: Float) {
+        hydration = min(1, max(0, value))
     }
     public mutating func resetCircadian(hours: Float) { circadianPhaseHours = hours }
     public mutating func markReward(time: Double) {

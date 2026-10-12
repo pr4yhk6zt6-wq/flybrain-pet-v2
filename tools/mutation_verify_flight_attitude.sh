@@ -24,19 +24,20 @@
 cd "$(dirname "$0")/.." || exit 1
 P=python3
 CORE=ios/Sources/FlyBrainCore/SimulationCore.swift
+MOTOR=ios/Sources/FlyBrainCore/MotorSystem.swift
 PID=python/flybrain/pid.py
 DEMO=data/generated/demo_micro.fbpack
 DEMO_TEST=ios/Tests/FlyBrainCoreTests/Resources/demo_micro.fbpack
 BAK=$(mktemp -d) || exit 1
-for f in "$CORE" "$PID" "$DEMO" "$DEMO_TEST"; do
+for f in "$CORE" "$MOTOR" "$PID" "$DEMO" "$DEMO_TEST"; do
     mkdir -p "$BAK/$(dirname "$f")"
     cp "$f" "$BAK/$f" || exit 1
 done
-trap 'for f in "$CORE" "$PID" "$DEMO" "$DEMO_TEST"; do cp "$BAK/$f" "$f"; done; rm -rf "$BAK"' EXIT
+trap 'for f in "$CORE" "$MOTOR" "$PID" "$DEMO" "$DEMO_TEST"; do cp "$BAK/$f" "$f"; done; rm -rf "$BAK"' EXIT
 
 fail=0
 reset_all() {
-    for f in "$CORE" "$PID" "$DEMO" "$DEMO_TEST"; do cp "$BAK/$f" "$f"; done
+    for f in "$CORE" "$MOTOR" "$PID" "$DEMO" "$DEMO_TEST"; do cp "$BAK/$f" "$f"; done
 }
 expect_fail() {
     gate="$1"; label="$2"
@@ -66,6 +67,21 @@ expect_pass
 
 echo
 echo "== mutation 1: remove the writer (the pre-TASK-008 state) =="
+# The value travels two hops (readout -> MotorSystem property -> MotorOutput),
+# so the mutation must break the CHAIN, not one link: commenting the readout
+# assignment alone left the MotorSystem hop still publishing a value, and the
+# gate (correctly) still saw a writer. Breaking the publication hop is what
+# makes the output a constant again.
+$P - <<'EOF'
+from pathlib import Path
+p = Path("ios/Sources/FlyBrainCore/MotorSystem.swift")
+t = p.read_text()
+before = t
+t = t.replace("        out.leftRightAsymmetry = leftRightAsymmetry",
+              "        // out.leftRightAsymmetry = leftRightAsymmetry", 1)
+assert t != before, "mutation 1 (MotorSystem hop) produced no change"
+p.write_text(t)
+EOF
 $P - <<'EOF'
 from pathlib import Path
 p = Path("ios/Sources/FlyBrainCore/SimulationCore.swift")
@@ -73,7 +89,7 @@ t = p.read_text()
 before = t
 t = t.replace("motor.leftRightAsymmetry = wingAsymmetry(left: wingLeft, right: wingRight)",
               "// motor.leftRightAsymmetry = wingAsymmetry(left: wingLeft, right: wingRight)", 1)
-assert t != before, "mutation 1 produced no change"
+assert t != before, "mutation 1 (readout hop) produced no change"
 p.write_text(t)
 EOF
 expect_fail tools/mirror_flight_attitude.py "the asymmetry has no writer"

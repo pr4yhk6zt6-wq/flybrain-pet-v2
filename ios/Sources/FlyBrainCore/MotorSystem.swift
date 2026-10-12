@@ -140,6 +140,14 @@ public final class MotorSystem {
     public private(set) var legs: [Leg] = []
     public private(set) var output = MotorOutput()
     public var wingMuscleDrive: Float = 0      // from neural drive of wing neuropil
+    /// Left/right wing drive imbalance (-1..1), set by the readout.
+    ///
+    /// `MotorOutput.leftRightAsymmetry` is what `BodyDynamics` consumes for its
+    /// roll and yaw moments, and `output` is `private(set)`, so the value has
+    /// to arrive through this property and be published in `update()` — the
+    /// same path `wingMuscleDrive` takes. Writing it straight onto `output`
+    /// from the readout does not compile, which is how this was caught.
+    public var leftRightAsymmetry: Float = 0
     public var haltereDrive: Float = 0
 
     public init() {
@@ -274,6 +282,12 @@ public final class MotorSystem {
         out.turningBias = (leftDrive - rightDrive) * MotorSystem.maxTurnRateDegPerS
         out.lateralSpeedTarget = (leftDrive - rightDrive) * MotorSystem.strideLengthMm * 4
         out.haltereDrive = min(wingMuscleDrive, 1)
+        // The asymmetry the readout computed, published for BodyDynamics. It is
+        // deliberately NOT re-derived from anything here: the readout is the
+        // only place that knows the per-side wing-pool rates, and inventing a
+        // second derivation from `wingMuscleDrive` (a scalar) would be a place
+        // for the two to disagree.
+        out.leftRightAsymmetry = leftRightAsymmetry
         out.pitchBias = (legs[0].coxa.torque + legs[3].coxa.torque) / 2
             - (legs[2].coxa.torque + legs[5].coxa.torque) / 2
 

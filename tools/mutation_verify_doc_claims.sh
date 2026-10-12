@@ -351,6 +351,25 @@ from pathlib import Path
 Path("docs/WORLD.md").write_text(Path("/tmp/world_md_backup.md").read_text())
 EOF
 
+# 16. README is put back to claiming there is no attitude loop, while the wing
+#     asymmetry has a producer. That is the inverse overclaim for TASK-008: a
+#     "remaining work" line that outlived the work. Check N must fail.
+$P - <<'EOF'
+from pathlib import Path
+p = Path("README.md")
+orig = p.read_text()
+Path("/tmp/readme_backup.md").write_text(orig)
+t = orig.replace("the attitude axis is wired — wing stroke asymmetry is",
+                 "no attitude/navigation loop: wing stroke asymmetry is not", 1)
+assert t != orig, "mutation 16 produced no change"
+p.write_text(t)
+EOF
+expect_fail "README claims there is no attitude loop while the axis is wired"
+$P - <<'EOF'
+from pathlib import Path
+Path("README.md").write_text(Path("/tmp/readme_backup.md").read_text())
+EOF
+
 expect_pass
 echo
 if [ "$fail" -eq 0 ]; then

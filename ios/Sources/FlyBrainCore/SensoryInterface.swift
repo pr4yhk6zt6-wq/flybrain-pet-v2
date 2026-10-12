@@ -336,6 +336,18 @@ public struct SensoryInterface {
         return out
     }
 
+    /// The cell `haltereInput` would inject into on this asset, or nil if the
+    /// haltere channel has no target.
+    ///
+    /// Exposed for TASK-008's tests the same way `touchAfferent` is: the
+    /// attitude loop's ONLY input is this channel, so "the producer exists but
+    /// nothing can move it" is a distinct failure from "the producer is wrong",
+    /// and it has to be checkable. Passing the rate makes this a pure lookup
+    /// rather than a state change.
+    public func haltereTargetForTesting() -> Int32? {
+        inputAfferent(region: .haltereNeuropil)
+    }
+
     /// Haltere inertial feedback (spec #16): rotational velocity → VNC
     /// stability circuits. Sign encodes rotation side.
     public func haltereInput(rotationRate: Float) -> [SensoryInput] {

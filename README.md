@@ -31,8 +31,13 @@ PNGs are committed and CI has no rasteriser.
 - [x] Real connectome ingestion (BANC): 153,746 neurons / 3,036,600 connections in `data/generated/` — **not bundled**; the app still ships the synthetic demo (see the caveat below)
 - [x] Flight aerodynamics: reduced-order wing forces; take-off and landing **emerge from the force balance**, not from a mode flag (asserted in `BodyDynamicsTests`)
 - [ ] Phase 6+ remaining:
-  - Flight **control**: no attitude/navigation loop; wings are driven by
-    neuromuscular drive only, with no visual or haltere stabilization term.
+  - Flight **control**: the attitude axis is wired — wing stroke asymmetry is
+    produced from the left/right wing-pool difference and the halteres drive the
+    corrective steering pathway, so the fly can roll and yaw. Still **not
+    implemented**: a navigation loop, and calibrated stabilisation gains (no
+    established value exists to calibrate against). Stroke amplitude asymmetry
+    is also one of several independently controlled wingbeat features in the
+    real animal, not the whole steering mechanism.
   - Walking validated against **published stepping kinematics** (the gait is
     asserted against support/tripod invariants only — see
     `BIOLOGICAL_LIMITATIONS.md`).

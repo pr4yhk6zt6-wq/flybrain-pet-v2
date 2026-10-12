@@ -352,6 +352,27 @@ def build_synthetic_demo(*, neurons_per_region: int = 24, seed: int = 42):
         (RegionID.VENTRAL_NERVE_CORD, RegionID.WING_NEUROPIL, +1, TransmitterType.GLUTAMATERGIC, (2, 4)),
         (RegionID.VENTRAL_NERVE_CORD, RegionID.HALTERE_NEUROPIL, +1, TransmitterType.GLUTAMATERGIC, (2, 4)),
         (RegionID.WING_NEUROPIL, RegionID.ABDOMINAL_NEUROMERE, +1, TransmitterType.CHOLINERGIC, (1, 2)),
+        # Haltere afferents drive the corrective steering pathway. Angular
+        # rotation evokes compensatory wing-stroke changes and the halteres are
+        # REQUIRED for that reflex (Dickinson, Phil. Trans. R. Soc. B 1999,
+        # PMID 10382224 — ablation abolishes it), with the reflex direction
+        # approximately linear in stimulus orientation.
+        #
+        # This edge is why it exists: the synthetic demo used to carry the
+        # haltere's ONLY outgoing connections to the VNC as GABAERGIC (-1), so
+        # driving the haltere inhibited its target and the corrective path never
+        # fired. The attitude loop then had a writer and no live input on the
+        # very asset the APP ships — TASK-007's shape again (a defect invisible
+        # on the demo is a defect the user can see, and one invisible on the
+        # demo is one nobody can). An excitatory haltere -> VNC drive is what
+        # the reflex architecture requires.
+        (RegionID.HALTERE_NEUROPIL, RegionID.VENTRAL_NERVE_CORD, +1, TransmitterType.CHOLINERGIC, (2, 4)),
+        # ...and a weaker contralateral inhibitory arm, because the reflex is
+        # directional (a rotation must drive the corrective side; the real
+        # organ's axes are NOT orthogonal and are decoded bilaterally — Nalbach,
+        # Neuroscience 1994, PMID 7969890). Keeping both signs means the
+        # asymmetry the readout publishes can carry a sign rather than only a
+        # magnitude.
         (RegionID.HALTERE_NEUROPIL, RegionID.VENTRAL_NERVE_CORD, -1, TransmitterType.GABAERGIC, (1, 2)),
         (RegionID.ABDOMINAL_NEUROMERE, RegionID.ENDOCRINE_VISCERAL, +1, TransmitterType.PEPTIDERGIC, (1, 2)),
     ]

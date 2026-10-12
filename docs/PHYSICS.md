@@ -30,7 +30,16 @@ the "BODY → WORLD" arrow of the loop carries no physics.
 5. **Flight (Phase 7)** — quasi-steady lift/thrust from wing state; takeoff when
    wing drive exceeds the weight margin; haltere-mediated stabilisation damps
    angular rate; landing when drive collapses.
-6. **Validation tests** (spec §27) — walking stability, turning sign,
+6. **Flight attitude (TASK-008)** — wing stroke asymmetry is produced from the
+   left/right wing-pool difference, and `BodyDynamics` turns it into the roll and
+   yaw moments from the QUADRATIC force difference between the two wings. The
+   haltere channel drives the corrective steering pathway. What is NOT claimed:
+   no numeric stabilisation gain is calibrated (none is established — the real
+   reflex is a short-latency, wingbeat-synchronous pathway whose architecture is
+   measured but whose gain and ms latency are not), and stroke amplitude
+   asymmetry is one of several independently controlled wingbeat features.
+   See `SimulationCore.wingAsymmetry` for the citations.
+7. **Validation tests** (spec §27) — walking stability, turning sign,
    flight initiation latency, landing, determinism under the new integrator.
 
 ## Aerodynamic calibration (increment 5, measured against the mirror)

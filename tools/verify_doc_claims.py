@@ -556,6 +556,27 @@ if WORLD_DOC.exists() and CORE_SWIFT.exists():
           "WORLD.md states water carries no phagostimulant valence")
 
 # --------------------------------------------------------------------------
+# N: the flight-attitude claim. README's Phase 6+ list says flight control has
+#    "no attitude/navigation loop". TASK-008 gave the attitude axis a producer
+#    and a live haltere input, so that sentence had to change — and if the code
+#    is reverted, the doc must not keep describing the fix. Checked in both
+#    directions, like M.
+# --------------------------------------------------------------------------
+README = ROOT / "README.md"
+if README.exists():
+    rtext = README.read_text()
+    asymmetry_produced = (
+        "motor.leftRightAsymmetry = wingAsymmetry(" in CORE_SWIFT.read_text())
+    claims_no_attitude = "no attitude/navigation loop" in rtext
+    check(asymmetry_produced != claims_no_attitude,
+          "README's flight-control claim matches whether the attitude axis is wired",
+          "the asymmetry has a producer but the README still says there is no "
+          "attitude loop" if (asymmetry_produced and claims_no_attitude) else
+          ("the axis is wired and the README does not claim otherwise"
+           if asymmetry_produced else
+           "no producer found — the README correctly says there is no loop"))
+
+# --------------------------------------------------------------------------
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, label, detail in results:
     tag = "PASS" if ok else "FAIL"

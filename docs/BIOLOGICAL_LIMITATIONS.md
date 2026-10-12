@@ -8,7 +8,7 @@ biology.
 ## Current dataset (Phase 3+ status)
 
 - **The bundled `demo_micro.fbpack` is a SYNTHETIC stand-in.** 480 neurons,
-  1250 synapses, labeled `SYNTHETIC-DEMO`; every attribute `INFERRED`.
+  1455 synapses, labeled `SYNTHETIC-DEMO`; every attribute `INFERRED`.
   It exercises the engine/pipeline but represents **no real animal**.
 - **This is what the app ships.** `AppModel` loads `demo_micro.fbpack`; the fly
   on screen is driven by the synthetic 480-neuron stand-in, not by a real

@@ -46,7 +46,7 @@ Provenance classes: `MEASURED / RECONSTRUCTED / INFERRED / PREDICTED / APPROXIMA
 
 ## Current bundled dataset
 
-`data/generated/demo_micro.fbpack` — **SYNTHETIC-DEMO** (480 neurons, 1250 synapses).
+`data/generated/demo_micro.fbpack` — **SYNTHETIC-DEMO** (480 neurons, 1455 synapses).
 
 - Explicitly labeled synthetic; all attributes `INFERRED`.
 - Biologically motivated graph layout (retina→lamina→medulla→lobula/lobula‑plate;

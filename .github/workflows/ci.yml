@@ -85,6 +85,11 @@ jobs:
         run: |
           python tools/probe_water_pathway.py
           sh tools/mutation_verify_water_pathway.sh
+      - name: Flight attitude (the wing asymmetry must have a producer)
+        run: |
+          python tools/mirror_flight_attitude.py
+          python tools/probe_haltere_wing_asymmetry.py
+          sh tools/mutation_verify_flight_attitude.sh
       - name: App stimulus reachability (the shipped app must be able to fire each channel)
         run: python tools/probe_app_stimulus_reachability.py
       - name: Mouth opens itself (the shipped asset must not be an inert connectome)

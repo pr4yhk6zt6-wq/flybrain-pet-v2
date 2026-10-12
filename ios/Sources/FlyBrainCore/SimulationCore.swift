@@ -530,6 +530,14 @@ public final class SimulationCore: @unchecked Sendable {
         internalState.setHydrationForTesting(value)
     }
 
+    /// The asymmetry function, exposed so the sign and the bound are checked
+    /// against the SAME code the readout calls. A test that reimplemented the
+    /// arithmetic would pass whether or not the production path was right —
+    /// the mistake `modulatedTasteForTesting` exists to avoid.
+    public func wingAsymmetryForTesting(left: Float, right: Float) -> Float {
+        wingAsymmetry(left: left, right: right)
+    }
+
     /// Taste acceptance at the tarsus (feet on substrate).
     ///
     /// Flies carry gustatory sensilla on the tarsi and taste what they stand
@@ -661,6 +669,20 @@ public final class SimulationCore: @unchecked Sendable {
         let classifyByRegion = !connectome.hasCellClasses
         var motorDriveTotal: Float = 0
         var motorDriveFromLabel: Float = 0
+        // The wing pool is summed PER SIDE as well as in total (TASK-008).
+        //
+        // `wing` alone is a scalar, so it can say how HARD the wings beat but
+        // never whether they beat unequally — and an unequal stroke is the only
+        // way this model can generate roll or yaw at all. `BodyDynamics` reads
+        // `command.wingAsymmetry` for exactly that torque, and
+        // `MotorSystem.out.leftRightAsymmetry` was read there and written
+        // NOWHERE: 0 assignments, 2 mentions. So the wings could not bank or
+        // turn on any asset, in any world, ever — the same "declared with no
+        // producer" shape as TASK-006 and TASK-007, this time on the flight
+        // axis. Splitting the sum by `side` is what gives the asymmetry a
+        // producer.
+        var wingLeft: Float = 0
+        var wingRight: Float = 0
         for idx in engine.firingActiveNeurons {
             let rate = engine.rateHz(of: idx)
             guard rate > 0 else { continue }
@@ -680,6 +702,7 @@ public final class SimulationCore: @unchecked Sendable {
                 if slot < drive.count { drive[slot] += rate }
             case .wingNeuropil:
                 wing += rate
+                if n.side == 1 { wingLeft += rate } else if n.side == 2 { wingRight += rate }
             case .subesophagealZone:
                 sez += rate
             default:
@@ -697,7 +720,69 @@ public final class SimulationCore: @unchecked Sendable {
         let d = drive.map { min($0 / reference, 1) }
         neuralDrive = d
         motor.wingMuscleDrive = min(wing / reference, 1)
+        motor.leftRightAsymmetry = wingAsymmetry(left: wingLeft, right: wingRight)
         motor.proboscisDrive = min(sez / reference, 1)
+    }
+
+    // MARK: - flight attitude (TASK-008)
+
+    /// Left/right wing drive imbalance, normalised to -1..1.
+    ///
+    /// This is the producer `BodyDynamics` was already reading: it turns
+    /// `command.wingAsymmetry` into a roll moment (`(fLeft - fRight) * arm`,
+    /// computed from the QUADRATIC force difference between the two wings) and
+    /// a yaw moment, so an unequal stroke is the model's only source of bank
+    /// or turn. Without a writer the whole attitude axis was structurally
+    /// dead — the wings could beat, but the fly could never roll or yaw.
+    ///
+    /// WHAT IS MEASURED. Angular rotation of the body elicits compensatory
+    /// changes in BOTH wing stroke amplitude and stroke frequency, and the
+    /// halteres are required for that reflex (Dickinson, *Phil. Trans. R. Soc.
+    /// B* 1999, PMID 10382224 — uni- and bilateral ablation abolishes it). The
+    /// reflex direction is approximately linear in stimulus orientation. Wing
+    /// stroke asymmetry producing roll/yaw moments is real (Heide & Götz,
+    /// *J. Exp. Biol.* 1996, PMID 8708578; Balint & Dickinson, *J. Exp. Biol.*
+    /// 2004, PMID 15472014).
+    ///
+    /// WHAT IS **NOT** MEASURED, and is therefore not claimed here:
+    ///   * There is no established numeric gain relating a firing-rate
+    ///     difference to a stroke asymmetry, so this function SCALES the
+    ///     difference to saturation rather than inventing a coefficient with
+    ///     units. The input is whatever the connectome produces.
+    ///   * Stroke asymmetry is NOT the whole mechanism. Yaw/roll arise from
+    ///     several independently controlled wingbeat features (amplitude, b1/b2
+    ///     phase, downstroke deviation, mode, and — for large perturbations —
+    ///     wing pitch angle; Balint & Dickinson 2004, PMID 15472014; Teoh et al.
+    ///     2025 preprint, PMID 41279419). Modelling amplitude alone is an
+    ///     APPROXIMATION valid for small perturbations, and it is stated as one.
+    ///   * The real haltere axes are NOT orthogonal (Nalbach, *Neuroscience*
+    ///     1994, PMID 7969890 — two vertical, two horizontal at ≈120°, decoded
+    ///     bilaterally). This model has one signed scalar, not four axes.
+    ///   * No numeric reflex latency is asserted: the architecture (fast,
+    ///     wingbeat-synchronous, monosynaptic from one haltere field to the
+    ///     first basalar motor neuron — Fayyazuddin & Dickinson, *J. Neurosci.*
+    ///     1996, PMID 8756451) is measured, but a specific ms figure was not
+    ///     verifiable and is not published here.
+    ///
+    /// SIGN. `(left - right)` normalised: a louder LEFT pool reads POSITIVE, and
+    /// `BodyDynamics` then gives that wing the faster stroke
+    /// (`vLeft = tip * (1 + 0.5·asym)`), so left louder ⇒ left stronger ⇒
+    /// `rollTorque = (fLeft - fRight) · arm` positive. The sign convention is
+    /// therefore "positive asymmetry = left wing producing more force", which
+    /// is the direct reading of the pool the readout just summed.
+    ///
+    /// Which pool SHOULD get louder when the body is perturbed is a separate
+    /// question, and this function deliberately does not answer it: that is the
+    /// job of the haltere reflex (a rotation must drive the corrective side),
+    /// and it belongs to the sensory channel, not to the readout. Keeping the
+    /// two apart is what lets the reflex direction be measured and gated
+    /// independently. `tools/mirror_flight_attitude.py` pins this mapping and
+    /// the sign the body will produce from it.
+    private func wingAsymmetry(left: Float, right: Float) -> Float {
+        let total = left + right
+        guard total > 0 else { return 0 }
+        // Normalised difference in -1..1. Scale-free on purpose: see above.
+        return min(max((left - right) / total, -1), 1)
     }
 
     /// Embody locomotion. The fly is a rigid body with mass and inertia; the

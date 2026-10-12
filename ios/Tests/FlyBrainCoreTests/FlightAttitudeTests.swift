@@ -127,7 +127,7 @@ final class FlightAttitudeTests: XCTestCase {
                         + "unreachable and the asymmetry can never move")
         if let t = target {
             let n = core.connectome.neurons[Int(t)]
-            XCTAssertEqual(n.region, RegionID.HALTERE_NEUROPIL.rawValue,
+            XCTAssertEqual(n.region, RegionID.haltereNeuropil.rawValue,
                            "the haltere afferent must land in the haltere neuropil")
             XCTAssertFalse(n.isMotorNeuron,
                            "injecting into a motor cell would drive the readout "

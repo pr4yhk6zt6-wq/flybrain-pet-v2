@@ -17,6 +17,16 @@ accepts, and then reports a call in `ios/Tests` when either
   (a) no declaration of that name exists, or
   (b) the call passes an argument label the declaration does not accept.
 
+It ALSO catches two name/type slips that cost three CI round trips in one
+sitting while TASK-008 was written, both of which read as correct:
+  (c) an enum case spelled in the PYTHON convention (`RegionID.HALTERE_NEUROPIL`)
+      when Swift declares lowerCamelCase (`RegionID.haltereNeuropil`) — the
+      region names differ between the pipeline and the firmware, so copying one
+      across languages is an easy mistake;
+  (d) comparing a UInt8 field (region/side/transmitter/provenance/flags) against
+      an enum's `.rawValue`, which is Int — `n.region == RegionID.x.rawValue`
+      does not compile, and it looks exactly like the right comparison.
+
 It does NOT type-check, resolve overloads by argument type, or understand
 generics. A label set is a SET of alternatives, so a call that is legal against
 any one overload passes. It reads names and labels only — a call that compiles
@@ -264,10 +274,82 @@ def call_sites(tests: Path):
             yield name, bare, labels, path.relative_to(ROOT), line
 
 
+def enum_cases() -> dict[str, set[str]]:
+    """`enum Name { case a = 1 ... }` -> {Name: {a, b, ...}} for every enum in the core."""
+    out: dict[str, set[str]] = {}
+    for path in sorted(SOURCES.rglob("*.swift")):
+        raw = path.read_text()
+        code, _ = code_with_offsets(raw)
+        for m in re.finditer(r"enum\s+(\w+)\s*(?::[^{]*)?\{", code):
+            name = m.group(1)
+            close = match_brace(code, m.end() - 1)
+            if close < 0:
+                continue
+            body = code[m.end():close]
+            cases: set[str] = set()
+            for cm in re.finditer(r"\bcase\s+([^\n(]+)", body):
+                for part in cm.group(1).split(","):
+                    tok = part.strip().split(" ")[0].strip()
+                    if re.fullmatch(r"[A-Za-z_]\w*", tok):
+                        cases.add(tok)
+            out.setdefault(name, set()).update(cases)
+    return out
+
+
+def match_brace(code: str, open_i: int) -> int:
+    depth = 0
+    i = open_i
+    while i < len(code):
+        c = code[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+# Fields the core declares as UInt8 (region, side, transmitter, provenance,
+# flags). Comparing one of them against a bare Int (e.g. an enum's `rawValue`)
+# does not compile, and it is a mistake that reads as correct — "compare the
+# region with the region enum" — which is why CI found it twice.
+UINT8_FIELDS = {"region", "side", "transmitter", "provenance", "flags"}
+
+
 def check() -> list[str]:
     index = build_index()
     types = declared_types()
+    cases = enum_cases()
     problems: list[str] = []
+
+    # Enum-case names: the Python side spells regions LEG_NEUROMERE, Swift spells
+    # them legNeuromere, and copying a case name across languages is an easy
+    # slip (`RegionID.HALTERE_NEUROPIL` was written and CI rejected it).
+    for path in sorted(TESTS.rglob("*.swift")):
+        raw = path.read_text()
+        code, offsets = code_with_offsets(raw)
+        for m in re.finditer(r"\b([A-Z]\w*)\.([A-Z][A-Z0-9_]{3,})\b", code):
+            tname, case = m.group(1), m.group(2)
+            if tname not in cases:
+                continue
+            off = line_of(offsets, m.start())
+            line = raw.count("\n", 0, off) + 1
+            problems.append(
+                f"{path.relative_to(ROOT)}:{line}: `{tname}.{case}` uses a "
+                f"SCREAMING_CASE case; `{tname}` declares "
+                f"{', '.join(sorted(cases[tname])[:6])}...")
+        # UInt8 field compared against a bare Int literal/enum rawValue
+        for m in re.finditer(r"\.(\w+)\s*,\s*([A-Z]\w*)\.(\w+)\.rawValue", code):
+            field, tname, case = m.group(1), m.group(2), m.group(3)
+            if field not in UINT8_FIELDS or tname not in cases:
+                continue
+            off = line_of(offsets, m.start())
+            line = raw.count("\n", 0, off) + 1
+            problems.append(
+                f"{path.relative_to(ROOT)}:{line}: `.{field}` is a UInt8, compared "
+                f"against `{tname}.{case}.rawValue` (Int) — needs a conversion")
     for name, bare, labels, rel, line in call_sites(TESTS):
         if bare in EXTERNAL or name in EXTERNAL or bare in SWIFT_KEYWORDS:
             continue
@@ -305,6 +387,40 @@ SELF_TEST_CASES = [
 ]
 
 
+def enum_case_problems(code: str) -> list[str]:
+    """The enum-name / UInt8 type checks, factored out so they can be self-tested."""
+    cases = enum_cases()
+    problems: list[str] = []
+    for m in re.finditer(r"\b([A-Z]\w*)\.([A-Z][A-Z0-9_]{3,})\b", code):
+        tname, case = m.group(1), m.group(2)
+        if tname in cases:
+            problems.append(f"{tname}.{case} uses a SCREAMING_CASE case")
+    for m in re.finditer(r"\.(\w+)\s*,\s*([A-Z]\w*)\.(\w+)\.rawValue", code):
+        field, tname, case = m.group(1), m.group(2), m.group(3)
+        if field in UINT8_FIELDS and tname in cases:
+            problems.append(f".{field} is a UInt8 compared against an Int rawValue")
+    return problems
+
+
+SELF_TEST_CASE_CASES = [
+    # (source declarations, test snippet, must be flagged?)
+    #
+    # Both of these were rejected by CI in one sitting, so both are pinned:
+    #  * a case spelled the Python way (SCREAMING_CASE) rather than Swift's
+    #  * a UInt8 field compared against an Int rawValue, which reads as the
+    #    "natural" comparison and does not compile
+    ("enum RegionID { case haltereNeuropil = 18 }",
+     "XCTAssertEqual(n.region, RegionID.HALTERE_NEUROPIL.rawValue)", True),
+    ("enum RegionID { case haltereNeuropil = 18 }",
+     "XCTAssertEqual(n.region, RegionID.haltereNeuropil.rawValue)", True),
+    # The correct forms must NOT be flagged, or the checker would be useless.
+    ("enum RegionID { case haltereNeuropil = 18 }",
+     "XCTAssertEqual(n.region, UInt8(RegionID.haltereNeuropil.rawValue))", False),
+    ("enum RegionID { case haltereNeuropil = 18 }",
+     "let r = RegionID.haltereNeuropil.rawValue\nXCTAssertEqual(Int(n.region), r)", False),
+]
+
+
 def self_test() -> int:
     """Prove the checker can fail, and can pass, before trusting either.
 
@@ -332,10 +448,20 @@ def self_test() -> int:
         if flagged != should_flag:
             failures += 1
             print(f"  SELF-TEST FAIL: {call!r} expected flag={should_flag} got {flagged}")
+    # The enum-name / UInt8 checks get their own cases: they were added because
+    # CI rejected three separate pushes for exactly these two shapes, so the
+    # checker must be shown to catch them before it is trusted to.
+    for decl, call, should_flag in SELF_TEST_CASE_CASES:
+        flagged = bool(enum_case_problems(f"{decl}\n{call}\n"))
+        if flagged != should_flag:
+            failures += 1
+            print(f"  SELF-TEST FAIL (enum/type): {call!r} expected "
+                  f"flag={should_flag} got {flagged}")
     if failures:
         print(f"self-test: {failures} case(s) wrong — the checker itself is broken")
         return 1
-    print(f"self-test: {len(SELF_TEST_CASES)} cases behave as specified")
+    print(f"self-test: {len(SELF_TEST_CASES) + len(SELF_TEST_CASE_CASES)} "
+          f"cases behave as specified")
     return 0
 
 
